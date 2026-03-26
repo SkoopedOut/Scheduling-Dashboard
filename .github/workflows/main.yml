@@ -27,8 +27,19 @@ jobs:
         with:
           node-version: 20
 
+      - name: Generate package-lock.json
+        run: npm install --package-lock-only
+
+      - name: Commit and push package-lock.json
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add package-lock.json
+          git commit -m "Add package-lock.json" || true
+          git push
+
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build
         run: npm run build
