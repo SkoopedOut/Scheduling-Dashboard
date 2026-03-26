@@ -2,7 +2,7 @@
   "name": "scheduling-dashboard",
   "version": "1.0.0",
   "private": true,
-  "homepage": "https://YOUR_GITHUB_USERNAME.github.io/scheduling-dashboard",
+  "homepage": "https://SkoopedOut.github.io/scheduling-dashboard",
   "type": "module",
   "scripts": {
     "dev": "vite",
