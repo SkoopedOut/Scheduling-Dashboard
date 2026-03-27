@@ -3,8 +3,8 @@ import { PublicClientApplication } from '@azure/msal-browser';
 // ============================================================
 // UPDATE THESE 3 VALUES — see SETUP.md for instructions
 // ============================================================
-const CLIENT_ID = 'YOUR_CLIENT_ID_HERE';
-const TENANT_ID = 'YOUR_TENANT_ID_HERE';
+const CLIENT_ID = '033521cc-16fc-4e1d-92d6-48cd61b46c00';
+const TENANT_ID = '1318af2f-0125-4b9b-91ee-ffa4262434db';
 const REDIRECT_URI = window.location.origin + window.location.pathname;
 
 const msalConfig = {
