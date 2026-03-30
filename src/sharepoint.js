@@ -53,23 +53,30 @@ export async function fetchScheduleFromSharePoint() {
   if (!token) throw new Error('Not authenticated');
 
   const fileInfo = getWeekFileInfo();
-  
-  // Build the Graph API URL to get the file content
-  // Using the drive path approach
   const encodedPath = encodeURIComponent(fileInfo.fullPath).replace(/%2F/g, '/');
-  const url = `${GRAPH_BASE}/sites/${SHAREPOINT_SITE_URL}:/drives`;
-  
-  // Step 1: Find the document library drive
-  const drivesResponse = await fetch(url, {
+
+  // Step 1: Resolve the SharePoint site to get its ID
+  // The colon must come after the hostname, before /sites/...
+  const siteUrl = `${GRAPH_BASE}/sites/hubofficeinc.sharepoint.com:/sites/SchedulingTeam`;
+  const siteResponse = await fetch(siteUrl, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!siteResponse.ok) throw new Error(`Failed to resolve site: ${siteResponse.status}`);
+  const siteData = await siteResponse.json();
+  const siteId = siteData.id;
+
+  // Step 2: List drives using the resolved site ID
+  const drivesResponse = await fetch(`${GRAPH_BASE}/sites/${siteId}/drives`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!drivesResponse.ok) throw new Error(`Failed to list drives: ${drivesResponse.status}`);
   const drivesData = await drivesResponse.json();
-  
-  const drive = drivesData.value.find(d => d.name === DRIVE_NAME);
-  if (!drive) throw new Error(`Drive "${DRIVE_NAME}" not found. Available: ${drivesData.value.map(d=>d.name).join(', ')}`);
 
-  // Step 2: Get the file content
+  // Step 3: Find the document library drive by name
+  const drive = drivesData.value.find(d => d.name === DRIVE_NAME);
+  if (!drive) throw new Error(`Drive "${DRIVE_NAME}" not found. Available: ${drivesData.value.map(d => d.name).join(', ')}`);
+
+  // Step 4: Get the file content
   const fileUrl = `${GRAPH_BASE}/drives/${drive.id}/root:/${encodedPath}:/content`;
   const fileResponse = await fetch(fileUrl, {
     headers: { Authorization: `Bearer ${token}` },
