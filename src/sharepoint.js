@@ -4,7 +4,7 @@ import * as XLSX from 'xlsx';
 // ============================================================
 // UPDATE THIS — your SharePoint site URL
 // ============================================================
-const SHAREPOINT_SITE_URL = 'https://hubofficeinc.sharepoint.com/sites/SchedulingTeam';
+const SHAREPOINT_SITE_URL = 'hubofficeinc.sharepoint.com/sites/SchedulingTeam';
 
 // File path structure: Scheduling Team - Documents/Schedule/04 April 26/3-28-2026_Log_Book_.xlsx
 const DRIVE_NAME = 'Scheduling Team - Documents';
