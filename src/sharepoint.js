@@ -4,15 +4,19 @@ import * as XLSX from 'xlsx';
 // ============================================================
 // UPDATE THIS — your SharePoint site URL
 // ============================================================
-const SHAREPOINT_SITE_URL = 'hubofficeinc.sharepoint.com/sites/SchedulingTeam';
+const SHAREPOINT_SITE_URL = 'hubofficeinc.sharepoint.com:/sites/SchedulingTeam';
 
-// File path structure: Scheduling Team - Documents/Schedule/04 April 26/3-28-2026_Log_Book_.xlsx
+// File path structure: Documents/Schedule/04 April 26/3-28-2026 Log Book.xlsx
 const DRIVE_NAME = 'Documents';
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 
 const DAY_ORDER = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 const FOREMAN_ORDER = ['Jeremy','Phil','Matt','Kritter','Eddie','Foley','Ayotte','Brian'];
+
+// Cache the site ID and drive ID after first lookup (these never change)
+let _cachedSiteId = null;
+let _cachedDriveId = null;
 
 // ============================================================
 // Calculate which file to fetch based on today's date
@@ -55,41 +59,75 @@ export async function fetchScheduleFromSharePoint() {
   const fileInfo = getWeekFileInfo();
   const encodedPath = encodeURIComponent(fileInfo.fullPath).replace(/%2F/g, '/');
 
-  // Step 1: Resolve the SharePoint site to get its ID
-  // The colon must come after the hostname, before /sites/...
-  const siteUrl = `${GRAPH_BASE}/sites/hubofficeinc.sharepoint.com:/sites/SchedulingTeam`;
-  const siteResponse = await fetch(siteUrl, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!siteResponse.ok) throw new Error(`Failed to resolve site: ${siteResponse.status}`);
-  const siteData = await siteResponse.json();
-  const siteId = siteData.id;
+  // Cache-bust parameter — forces Graph to skip CDN/edge cache
+  const cb = `_cb=${Date.now()}`;
 
-  // Step 2: List drives using the resolved site ID
-  const drivesResponse = await fetch(`${GRAPH_BASE}/sites/${siteId}/drives`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!drivesResponse.ok) throw new Error(`Failed to list drives: ${drivesResponse.status}`);
-  const drivesData = await drivesResponse.json();
+  // Step 1: Resolve the SharePoint site ID (cached after first call)
+  if (!_cachedSiteId) {
+    const siteUrl = `${GRAPH_BASE}/sites/hubofficeinc.sharepoint.com:/sites/SchedulingTeam?${cb}`;
+    const siteResponse = await fetch(siteUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!siteResponse.ok) throw new Error(`Failed to resolve site: ${siteResponse.status}`);
+    const siteData = await siteResponse.json();
+    _cachedSiteId = siteData.id;
+  }
 
-  // Step 3: Find the document library drive by name
-  const drive = drivesData.value.find(d => d.name === DRIVE_NAME);
-  if (!drive) throw new Error(`Drive "${DRIVE_NAME}" not found. Available: ${drivesData.value.map(d => d.name).join(', ')}`);
+  // Step 2: Find the document library drive (cached after first call)
+  if (!_cachedDriveId) {
+    const drivesResponse = await fetch(`${GRAPH_BASE}/sites/${_cachedSiteId}/drives?${cb}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!drivesResponse.ok) throw new Error(`Failed to list drives: ${drivesResponse.status}`);
+    const drivesData = await drivesResponse.json();
 
-  // Step 4: Get the file content
-  const fileUrl = `${GRAPH_BASE}/drives/${drive.id}/root:/${encodedPath}:/content`;
-  const fileResponse = await fetch(fileUrl, {
-    headers: { Authorization: `Bearer ${token}` },
+    const drive = drivesData.value.find(d => d.name === DRIVE_NAME);
+    if (!drive) throw new Error(`Drive "${DRIVE_NAME}" not found. Available: ${drivesData.value.map(d => d.name).join(', ')}`);
+    _cachedDriveId = drive.id;
+  }
+
+  // Step 3: Get file metadata first (respects real-time changes better than /content)
+  const metaUrl = `${GRAPH_BASE}/drives/${_cachedDriveId}/root:/${encodedPath}?select=id,name,lastModifiedDateTime,eTag&${cb}`;
+  const metaResponse = await fetch(metaUrl, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Cache-Control': 'no-cache, no-store',
+      Pragma: 'no-cache',
+    },
   });
-  if (!fileResponse.ok) {
-    if (fileResponse.status === 404) {
+  if (!metaResponse.ok) {
+    if (metaResponse.status === 404) {
       throw new Error(`File not found: ${fileInfo.fullPath}\nExpected at: ${DRIVE_NAME}/${fileInfo.fullPath}`);
     }
+    throw new Error(`Failed to get file info: ${metaResponse.status}`);
+  }
+  const meta = await metaResponse.json();
+
+  // Step 4: Download file content using item ID (bypasses path-based caching)
+  const fileUrl = `${GRAPH_BASE}/drives/${_cachedDriveId}/items/${meta.id}/content?${cb}`;
+  const fileResponse = await fetch(fileUrl, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Cache-Control': 'no-cache, no-store',
+      Pragma: 'no-cache',
+      'If-None-Match': '', // Force fresh download, ignore ETags
+    },
+  });
+  if (!fileResponse.ok) {
     throw new Error(`Failed to fetch file: ${fileResponse.status}`);
   }
 
   const arrayBuffer = await fileResponse.arrayBuffer();
-  return parseExcelFile(arrayBuffer);
+  const parsed = parseExcelFile(arrayBuffer);
+
+  // Attach metadata so UI can show last-modified time
+  parsed._meta = {
+    lastModified: meta.lastModifiedDateTime,
+    fileName: meta.name,
+    eTag: meta.eTag,
+  };
+
+  return parsed;
 }
 
 // ============================================================
@@ -181,9 +219,6 @@ function parseDaySheet(sheet, dayName) {
 }
 
 function parseRosterCrews(sheet) {
-  // Foremen are in row 8, 10, 12, 14, 16, 18 area in columns Q, S, U, W
-  // with their vehicle quals in R, T, V, X
-  // Crew members are listed below each foreman
   const crews = {};
   const foremanCols = [
     { nameCol: 'Q', qualCol: 'R' },
@@ -193,14 +228,12 @@ function parseRosterCrews(sheet) {
   ];
 
   for (const fc of foremanCols) {
-    // Check row 8 for foreman name
     const foremanName = cellVal(sheet, `${fc.nameCol}8`);
     if (!foremanName || !FOREMAN_ORDER.includes(String(foremanName).trim())) continue;
 
     const fName = String(foremanName).trim();
     const members = [];
 
-    // Read crew members from rows 9-19 (below the foreman)
     for (let r = 9; r <= 19; r++) {
       const name = cellVal(sheet, `${fc.nameCol}${r}`);
       const qual = cellVal(sheet, `${fc.qualCol}${r}`);
@@ -219,7 +252,6 @@ function parseRosterCrews(sheet) {
 }
 
 function parseRosterPools(sheet) {
-  // Laborers, Drivers, Extra are in rows 21+ in columns Q, S, U/W
   const laborers = [];
   const drivers = [];
   const extra = [];
@@ -231,12 +263,10 @@ function parseRosterPools(sheet) {
     const drv = cellVal(sheet, `S${r}`);
     if (drv && typeof drv === 'string' && drv.trim()) drivers.push({ name: drv.trim() });
 
-    // Extra spans columns U-Y
     for (const col of ['U', 'V', 'W', 'X', 'Y']) {
       const ex = cellVal(sheet, `${col}${r}`);
       if (ex && typeof ex === 'string' && ex.trim()) {
         const val = ex.trim();
-        // Skip if it's a qualification letter
         if (['T', 'V', 'A'].includes(val)) continue;
         extra.push({ name: val });
       }
