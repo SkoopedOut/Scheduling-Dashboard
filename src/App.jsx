@@ -8,7 +8,7 @@ const FOREMAN_COLORS = {
   Jeremy:"#4a9eff", Phil:"#f59e0b", Matt:"#10b981", Kritter:"#f472b6",
   Eddie:"#a78bfa", Foley:"#06b6d4", Ayotte:"#ef4444", Brian:"#84cc16",
 };
-const REFRESH_MS = 5 * 60 * 1000;
+const REFRESH_MS = 5 * 1000;
 
 function getTodayDayName(){ return DAY_ORDER[new Date().getDay()]; }
 function formatDate(ds){ if(!ds) return ""; return new Date(ds+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"}); }
