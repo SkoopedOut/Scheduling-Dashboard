@@ -8,7 +8,7 @@ const FOREMAN_COLORS = {
   Jeremy:"#4a9eff", Phil:"#f59e0b", Matt:"#10b981", Kritter:"#f472b6",
   Eddie:"#a78bfa", Foley:"#06b6d4", Ayotte:"#ef4444", Brian:"#84cc16",
 };
-const REFRESH_MS = 5 * 1000;
+const REFRESH_MS = 2 * 60 * 1000; // 2 minutes — cache-busting makes this safe now
 
 function getTodayDayName(){ return DAY_ORDER[new Date().getDay()]; }
 function formatDate(ds){ if(!ds) return ""; return new Date(ds+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"}); }
@@ -36,18 +36,33 @@ function FolderIcon({val}){
 }
 
 // ── Connection Bar ───────────────────────────────────────────
-function ConnectionBar({mode,lastRefresh,nextRefresh,isConnected,onConnect,error}){
+function ConnectionBar({mode,lastRefresh,nextRefresh,isConnected,onConnect,onRefresh,error,fileMeta,isRefreshing}){
   const [now,setNow]=useState(Date.now());
   useEffect(()=>{const t=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(t);},[]);
+  const modifiedStr = fileMeta?.lastModified
+    ? `File saved ${new Date(fileMeta.lastModified).toLocaleTimeString()}`
+    : '';
   return(
     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"7px 20px",fontSize:"11px",fontFamily:"'JetBrains Mono',monospace",background:error?"rgba(239,68,68,0.06)":isConnected?"rgba(16,185,129,0.06)":"rgba(245,158,11,0.06)",borderBottom:`1px solid ${error?"rgba(239,68,68,0.15)":isConnected?"rgba(16,185,129,0.15)":"rgba(245,158,11,0.15)"}`,color:"#6b7789"}}>
       <div style={{display:"flex",alignItems:"center",gap:"10px"}}>
         <span style={{width:"6px",height:"6px",borderRadius:"50%",background:error?"#ef4444":isConnected?"#10b981":"#f59e0b"}}/>
         <span>{error ? `ERROR: ${error}` : mode==="demo"?"DEMO MODE — Sample data":"LIVE — SharePoint connected"}</span>
+        {modifiedStr && <span style={{color:"#4a5568"}}>· {modifiedStr}</span>}
       </div>
-      <div style={{display:"flex",alignItems:"center",gap:"16px"}}>
-        {lastRefresh && <span>Refreshed {Math.floor((now-lastRefresh)/1000)}s ago</span>}
-        {nextRefresh && <span>Next in {Math.max(0,Math.floor((nextRefresh-now)/1000))}s</span>}
+      <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+        {lastRefresh && <span>Fetched {Math.floor((now-lastRefresh)/1000)}s ago</span>}
+        {nextRefresh && mode==="live" && <span>Next in {Math.max(0,Math.floor((nextRefresh-now)/1000))}s</span>}
+        {mode==="live" && (
+          <button onClick={onRefresh} disabled={isRefreshing} style={{
+            background:isRefreshing?"rgba(255,255,255,0.03)":"rgba(52,211,153,0.1)",
+            border:isRefreshing?"1px solid rgba(255,255,255,0.06)":"1px solid rgba(52,211,153,0.2)",
+            color:isRefreshing?"#4a5568":"#34d399",
+            padding:"3px 10px",borderRadius:"4px",fontSize:"10px",cursor:isRefreshing?"wait":"pointer",
+            fontWeight:700,fontFamily:"'JetBrains Mono',monospace",letterSpacing:"0.3px",transition:"all 0.15s",
+          }}>
+            {isRefreshing ? "REFRESHING..." : "↻ REFRESH NOW"}
+          </button>
+        )}
         {mode==="demo" && (
           <button onClick={onConnect} style={{background:"rgba(74,158,255,0.12)",border:"1px solid rgba(74,158,255,0.25)",color:"#4a9eff",padding:"3px 10px",borderRadius:"4px",fontSize:"10px",cursor:"pointer",fontWeight:700}}>
             {isConfigured() ? "SIGN IN" : "DEMO ONLY"}
@@ -176,6 +191,8 @@ export default function App(){
   const [nextRefresh,setNextRefresh]=useState(Date.now()+REFRESH_MS);
   const [activeTab,setActiveTab]=useState("schedule");
   const [error,setError]=useState(null);
+  const [fileMeta,setFileMeta]=useState(null);
+  const [isRefreshing,setIsRefreshing]=useState(false);
 
   // Try auto-login on mount
   useEffect(()=>{
@@ -210,13 +227,20 @@ export default function App(){
   async function refreshData(){
     try {
       setError(null);
+      setIsRefreshing(true);
       const newData = await fetchScheduleFromSharePoint();
+      if (newData._meta) {
+        setFileMeta(newData._meta);
+        delete newData._meta;
+      }
       setData(newData);
       setLastRefresh(Date.now());
       setNextRefresh(Date.now()+REFRESH_MS);
     } catch(e){
       console.error("Refresh failed:", e);
       setError(e.message);
+    } finally {
+      setIsRefreshing(false);
     }
   }
 
@@ -242,7 +266,7 @@ export default function App(){
 
   return(
     <div style={{minHeight:"100vh",background:"#0a0f16",color:"#e2e8f0",fontFamily:"'Inter',-apple-system,sans-serif"}}>
-      <ConnectionBar mode={mode} lastRefresh={lastRefresh} nextRefresh={nextRefresh} isConnected={mode==="live"} onConnect={handleConnect} error={error}/>
+      <ConnectionBar mode={mode} lastRefresh={lastRefresh} nextRefresh={nextRefresh} isConnected={mode==="live"} onConnect={handleConnect} onRefresh={refreshData} error={error} fileMeta={fileMeta} isRefreshing={isRefreshing}/>
 
       {/* Header */}
       <div style={{padding:"20px 24px 0",display:"flex",alignItems:"flex-end",justifyContent:"space-between",flexWrap:"wrap",gap:"12px"}}>
