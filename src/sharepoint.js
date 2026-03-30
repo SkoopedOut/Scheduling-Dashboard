@@ -35,7 +35,7 @@ function getWeekFileInfo(date = new Date()) {
   const y = saturday.getFullYear();
 
   const folderName = `${mm} ${monthName} ${year}`;
-  const fileName = `${m}-${day}-${y}_Log_Book_.xlsx`;
+  const fileName = `${m}-${day}-${y} Log Book.xlsx`;
 
   return {
     folderPath: `Schedule/${folderName}`,
