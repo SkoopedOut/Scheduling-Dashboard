@@ -7,7 +7,7 @@ import * as XLSX from 'xlsx';
 const SHAREPOINT_SITE_URL = 'hubofficeinc.sharepoint.com/sites/SchedulingTeam';
 
 // File path structure: Scheduling Team - Documents/Schedule/04 April 26/3-28-2026_Log_Book_.xlsx
-const DRIVE_NAME = 'Scheduling Team - Documents';
+const DRIVE_NAME = 'Documents';
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 
