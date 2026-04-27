@@ -12,7 +12,7 @@ const DRIVE_NAME = 'Documents';
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 
 const DAY_ORDER = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-const FOREMAN_ORDER = ['Jeremy','Phil','Matt','Kritter','Eddie','Foley','Ayotte','Brian'];
+const FOREMAN_ORDER = ['Jeremy','Phil','Matt','Kritter','Eddie','Craig','Ayotte','Brian'];
 
 // Cache the site ID and drive ID after first lookup (these never change)
 let _cachedSiteId = null;
@@ -229,7 +229,7 @@ function parseRosterCrews(sheet) {
 
   for (const fc of foremanCols) {
     const foremanName = cellVal(sheet, `${fc.nameCol}8`);
-    if (!foremanName || !FOREMAN_ORDER.includes(String(foremanName).trim())) continue;
+    if (!foremanName || !String(foremanName).trim()) continue;
 
     const fName = String(foremanName).trim();
     const members = [];

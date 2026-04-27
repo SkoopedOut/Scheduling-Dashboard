@@ -1,7 +1,7 @@
 // Sample data extracted from the uploaded 3-28-2026_Log_Book_.xlsx
 // Used in demo mode when SharePoint is not connected
 
-const FOREMAN_ORDER = ['Jeremy','Phil','Matt','Kritter','Eddie','Foley','Ayotte','Brian'];
+const FOREMAN_ORDER = ['Jeremy','Phil','Matt','Kritter','Eddie','Craig','Ayotte','Brian'];
 
 function buildCrews() {
   return {
@@ -20,8 +20,8 @@ function buildCrews() {
     Eddie: { members: [
       { name: "Oscar", qual: "V" }, { name: "Pete", qual: "V" }, { name: "Longo", qual: "T" }, { name: "Sophia", qual: "A" },
     ]},
-    Foley: { members: [
-      { name: "Eastman", qual: "T" }, { name: "Craig", qual: null }, { name: "Tom W", qual: "V" }, { name: "Moe", qual: null }, { name: "Chitunda", qual: null },
+    Craig: { members: [
+      { name: "Eastman", qual: "T" }, { name: "Tom W", qual: "V" }, { name: "Moe", qual: null }, { name: "Chitunda", qual: null },
     ]},
     Ayotte: { members: [
       { name: "Josh", qual: null }, { name: "Trea", qual: "T" }, { name: "Rich", qual: "T" },
@@ -50,7 +50,7 @@ export const SAMPLE_DATA = {
     {num:10,customer:"Hilton Back Bay",poJob:null,location:"40 Dalton St Boston",onsiteTime:"1:30pm",trucks:"HUB 7,3",numMen:5,crew:["Ronny","Trea","Dom C","Johnny","Scott"],calledIn:"R",jobFolder:null},
   ], crews:buildCrews(), pools:buildPools() },
   Tuesday: { day:"Tuesday",date:"2026-03-24", jobs:[
-    {num:1,customer:"Hilton Back Bay",poJob:"16332",location:"40 Dalton St Boston",onsiteTime:"6:30am",trucks:"na",numMen:9,crew:["Jeremy","Colby","John D","Brian D","Dave O","Foley","Juan","Brian","Neil","Pete"],calledIn:"R",jobFolder:null},
+    {num:1,customer:"Hilton Back Bay",poJob:"16332",location:"40 Dalton St Boston",onsiteTime:"6:30am",trucks:"na",numMen:9,crew:["Jeremy","Colby","John D","Brian D","Dave O","Craig","Juan","Brian","Neil","Pete"],calledIn:"R",jobFolder:null},
     {num:2,customer:"Atreides",poJob:"17027",location:"1 International Place Fl 44 Boston",onsiteTime:"6am",trucks:"van",numMen:2,crew:["Eddie","Oscar"],calledIn:"G",jobFolder:"sm"},
     {num:3,customer:"Arrowstreet",poJob:"15252A",location:"200 Clarendon St Fl 32 Boston",onsiteTime:"6am",trucks:"Hub 5",numMen:2,crew:["Phil","Weeb","Mike-T"],calledIn:"D",jobFolder:"sm"},
     {num:4,customer:"DFCI",poJob:"17168",location:"10 Brookline Place Brookline",onsiteTime:"6am",trucks:"Hub 5",numMen:2,crew:["Matt","Ricky","Mike-T"],calledIn:"D",jobFolder:"sm"},
@@ -90,7 +90,7 @@ export const SAMPLE_DATA = {
     {num:6,customer:"Merganser",poJob:"16822",location:"99 High St Boston",onsiteTime:"6am",trucks:"van",numMen:2,crew:["Ayotte","Mike G"],calledIn:"G",jobFolder:"y"},
     {num:7,customer:"Nimbus Therapeutics",poJob:"16568",location:"22 Boston Wharf Rd Fl 9 Boston",onsiteTime:"6am",trucks:"1",numMen:2,crew:["Chris R","Tom H"],calledIn:"D",jobFolder:"sm"},
     {num:8,customer:"Great Gray",poJob:"15791B",location:"40 Rowes Wharf Boston",onsiteTime:"6am",trucks:"1",numMen:2,crew:["Matt","Ricky","Pat-T"],calledIn:"G",jobFolder:"y"},
-    {num:9,customer:"Shawmut",poJob:"17038",location:"560 Harrison Ave",onsiteTime:"6am",trucks:"1",numMen:3,crew:["Foley","Brett","Pat C","Pat-T"],calledIn:"G",jobFolder:"y"},
+    {num:9,customer:"Shawmut",poJob:"17038",location:"560 Harrison Ave",onsiteTime:"6am",trucks:"1",numMen:3,crew:["Craig","Brett","Pat C","Pat-T"],calledIn:"G",jobFolder:"y"},
     {num:10,customer:"KKR",poJob:"16972",location:"2 International Place Fl 9 Boston",onsiteTime:"5pm",trucks:"na",numMen:6,crew:["Phil","Dave","Kevin H","Mark","Kritter","Weeb"],calledIn:"D",jobFolder:null},
     {num:11,customer:"Hilton Back Bay",poJob:null,location:"40 Dalton St Boston",onsiteTime:"1:30pm",trucks:"1",numMen:5,crew:["Ronny","Trea","Dom C","Johnny","Scott"],calledIn:"R",jobFolder:null},
     {num:12,customer:"Star Sales Pick up",poJob:null,location:null,onsiteTime:null,trucks:"1",numMen:1,crew:["Pat-t"],calledIn:null,jobFolder:"n"},
