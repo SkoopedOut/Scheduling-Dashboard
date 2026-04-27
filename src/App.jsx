@@ -73,43 +73,122 @@ function ConnectionBar({mode,lastRefresh,nextRefresh,isConnected,onConnect,onRef
   );
 }
 
+// ── Operational Helpers ──────────────────────────────────────
+function getConflictsForDay(dayData){
+  const jobs=dayData?.jobs||[];
+  const personMap={};
+  for(const job of jobs){
+    for(const name of (job.crew||[])){
+      if(!personMap[name]) personMap[name]=new Map();
+      // Same poJob = same job (regular + OT), don't count as conflict
+      const key=job.poJob?String(job.poJob):`__num_${job.num}`;
+      if(!personMap[name].has(key)) personMap[name].set(key,job);
+    }
+  }
+  return Object.entries(personMap)
+    .filter(([,map])=>map.size>1)
+    .map(([name,map])=>({name,jobs:Array.from(map.values())}));
+}
+
 // ── Jobs Table ───────────────────────────────────────────────
 function JobsTable({dayData}){
   if(!dayData?.jobs?.length) return <div style={{padding:"50px",textAlign:"center",color:"#444",fontStyle:"italic"}}>No jobs scheduled.</div>;
+  const jobs=dayData.jobs;
+  const conflicts=getConflictsForDay(dayData);
+  const conflictNames=new Set(conflicts.map(c=>c.name));
+  const unassigned=jobs.filter(j=>!j.crew?.length);
+  const hcMismatches=jobs.filter(j=>j.numMen!=null&&j.crew?.length>0&&j.numMen!==j.crew.length);
+  const hasIssues=conflicts.length>0||unassigned.length>0||hcMismatches.length>0;
   return(
-    <div style={{overflowX:"auto"}}>
-      <table style={{width:"100%",borderCollapse:"collapse",fontSize:"13px"}}>
-        <thead><tr style={{borderBottom:"2px solid #1a2436"}}>
-          {["#","Customer","PO / Job#","Location","Onsite","Trucks","Men","Crew","PM","Folder"].map(h=>
-            <th key={h} style={{padding:"10px 8px",textAlign:"left",fontSize:"9px",fontWeight:800,letterSpacing:"1.2px",color:"#4a5568",textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
+    <div>
+      {hasIssues&&(
+        <div style={{display:"flex",flexDirection:"column",gap:"5px",marginBottom:"14px"}}>
+          {conflicts.length>0&&(
+            <div style={{padding:"7px 12px",borderRadius:"6px",background:"rgba(239,68,68,0.07)",border:"1px solid rgba(239,68,68,0.18)",fontSize:"11px",lineHeight:1.7}}>
+              <span style={{fontWeight:800,color:"#ef4444",marginRight:"8px",letterSpacing:"0.5px"}}>⚠ CONFLICTS</span>
+              {conflicts.map((c,i)=>(
+                <span key={i}>
+                  <span style={{color:"#fca5a5",fontWeight:700}}>{c.name}</span>
+                  <span style={{color:"#4a5568"}}> on </span>
+                  {c.jobs.map((j,ji)=><span key={ji}><span style={{color:"#e2e8f0"}}>{j.customer}</span>{ji<c.jobs.length-1&&<span style={{color:"#4a5568"}}> & </span>}</span>)}
+                  {i<conflicts.length-1&&<span style={{margin:"0 10px",color:"#2d3748"}}>·</span>}
+                </span>
+              ))}
+            </div>
           )}
-        </tr></thead>
-        <tbody>{dayData.jobs.map((job,i)=>
-          <tr key={i} style={{borderBottom:"1px solid rgba(255,255,255,0.03)",background:i%2?"rgba(255,255,255,0.012)":"transparent",transition:"background 0.12s"}}
-            onMouseEnter={e=>e.currentTarget.style.background="rgba(74,158,255,0.04)"}
-            onMouseLeave={e=>e.currentTarget.style.background=i%2?"rgba(255,255,255,0.012)":"transparent"}>
-            <td style={{padding:"10px 8px",fontWeight:800,color:"#4a9eff",fontFamily:"'JetBrains Mono',monospace"}}>{job.num}</td>
-            <td style={{padding:"10px 8px",fontWeight:700,color:"#e2e8f0",maxWidth:"150px"}}>{job.customer}</td>
-            <td style={{padding:"10px 8px",color:"#7a8599",fontFamily:"'JetBrains Mono',monospace",fontSize:"11px"}}>{job.poJob||"—"}</td>
-            <td style={{padding:"10px 8px",color:"#7a8599",maxWidth:"190px",fontSize:"12px"}}>{job.location||"—"}</td>
-            <td style={{padding:"10px 8px",fontWeight:700,color:"#e8a948",whiteSpace:"nowrap",fontFamily:"'JetBrains Mono',monospace",fontSize:"12px"}}>{job.onsiteTime||"TBD"}</td>
-            <td style={{padding:"10px 8px",color:"#7a8599",fontSize:"12px"}}>{job.trucks||"—"}</td>
-            <td style={{padding:"10px 8px",fontWeight:800,textAlign:"center",color:job.numMen>=5?"#f472b6":"#e2e8f0",fontSize:"15px"}}>{job.numMen||"—"}</td>
-            <td style={{padding:"10px 8px",maxWidth:"300px"}}>
-              <div style={{display:"flex",flexWrap:"wrap",gap:"3px"}}>
-                {(job.crew||[]).map((n,j)=>{
-                  const isF=FOREMAN_ORDER.includes(n); const fc=FOREMAN_COLORS[n];
-                  return <span key={j} style={{display:"inline-block",padding:"2px 7px",borderRadius:"4px",fontSize:"11px",
-                    background:isF?`${fc}18`:"rgba(255,255,255,0.05)",color:isF?fc:"#9ca3af",
-                    fontWeight:isF?700:400,border:isF?`1px solid ${fc}35`:"1px solid transparent"}}>{n}</span>;
-                })}
-              </div>
-            </td>
-            <td style={{padding:"10px 8px",textAlign:"center"}}><PMBadge initials={job.calledIn}/></td>
-            <td style={{padding:"10px 8px",textAlign:"center"}}><FolderIcon val={job.jobFolder}/></td>
-          </tr>
-        )}</tbody>
-      </table>
+          {unassigned.length>0&&(
+            <div style={{padding:"7px 12px",borderRadius:"6px",background:"rgba(245,158,11,0.07)",border:"1px solid rgba(245,158,11,0.18)",fontSize:"11px",lineHeight:1.7}}>
+              <span style={{fontWeight:800,color:"#f59e0b",marginRight:"8px",letterSpacing:"0.5px"}}>⚠ NO CREW ASSIGNED</span>
+              {unassigned.map((j,i)=>(
+                <span key={i}>
+                  <span style={{color:"#e2e8f0",fontWeight:600}}>#{j.num} {j.customer}</span>
+                  {i<unassigned.length-1&&<span style={{margin:"0 10px",color:"#2d3748"}}>·</span>}
+                </span>
+              ))}
+            </div>
+          )}
+          {hcMismatches.length>0&&(
+            <div style={{padding:"7px 12px",borderRadius:"6px",background:"rgba(251,146,60,0.07)",border:"1px solid rgba(251,146,60,0.18)",fontSize:"11px",lineHeight:1.7}}>
+              <span style={{fontWeight:800,color:"#fb923c",marginRight:"8px",letterSpacing:"0.5px"}}>⚠ HEADCOUNT MISMATCH</span>
+              {hcMismatches.map((j,i)=>(
+                <span key={i}>
+                  <span style={{color:"#e2e8f0",fontWeight:600}}>#{j.num} {j.customer}</span>
+                  <span style={{color:"#4a5568",fontFamily:"'JetBrains Mono',monospace"}}> ({j.numMen} listed / {j.crew.length} named)</span>
+                  {i<hcMismatches.length-1&&<span style={{margin:"0 10px",color:"#2d3748"}}>·</span>}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:"13px"}}>
+          <thead><tr style={{borderBottom:"2px solid #1a2436"}}>
+            {["#","Customer","PO / Job#","Location","Onsite","Trucks","Men","Crew","PM","Folder"].map(h=>
+              <th key={h} style={{padding:"10px 8px",textAlign:"left",fontSize:"9px",fontWeight:800,letterSpacing:"1.2px",color:"#4a5568",textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
+            )}
+          </tr></thead>
+          <tbody>{jobs.map((job,i)=>{
+            const noCrewFlag=!job.crew?.length;
+            const hcFlag=job.numMen!=null&&job.crew?.length>0&&job.numMen!==job.crew.length;
+            const rowBg=noCrewFlag?"rgba(245,158,11,0.05)":i%2?"rgba(255,255,255,0.012)":"transparent";
+            return(
+              <tr key={i} style={{borderBottom:"1px solid rgba(255,255,255,0.03)",background:rowBg,transition:"background 0.12s"}}
+                onMouseEnter={e=>e.currentTarget.style.background="rgba(74,158,255,0.04)"}
+                onMouseLeave={e=>e.currentTarget.style.background=rowBg}>
+                <td style={{padding:"10px 8px",fontWeight:800,color:"#4a9eff",fontFamily:"'JetBrains Mono',monospace"}}>{job.num}</td>
+                <td style={{padding:"10px 8px",fontWeight:700,color:"#e2e8f0",maxWidth:"150px"}}>{job.customer}</td>
+                <td style={{padding:"10px 8px",color:"#7a8599",fontFamily:"'JetBrains Mono',monospace",fontSize:"11px"}}>{job.poJob||"—"}</td>
+                <td style={{padding:"10px 8px",color:"#7a8599",maxWidth:"190px",fontSize:"12px"}}>{job.location||"—"}</td>
+                <td style={{padding:"10px 8px",fontWeight:700,color:"#e8a948",whiteSpace:"nowrap",fontFamily:"'JetBrains Mono',monospace",fontSize:"12px"}}>{job.onsiteTime||"TBD"}</td>
+                <td style={{padding:"10px 8px",color:"#7a8599",fontSize:"12px"}}>{job.trucks||"—"}</td>
+                <td style={{padding:"10px 8px",fontWeight:800,textAlign:"center",fontSize:"15px"}}>
+                  <span style={{color:hcFlag?"#fb923c":job.numMen>=5?"#f472b6":"#e2e8f0"}}>{job.numMen||"—"}</span>
+                  {hcFlag&&<div style={{fontSize:"8px",color:"#fb923c",fontWeight:700,lineHeight:1.2}}>{job.crew.length} named</div>}
+                </td>
+                <td style={{padding:"10px 8px",maxWidth:"300px"}}>
+                  {noCrewFlag
+                    ?<span style={{color:"#4a5568",fontStyle:"italic",fontSize:"11px"}}>— none assigned —</span>
+                    :<div style={{display:"flex",flexWrap:"wrap",gap:"3px"}}>
+                      {(job.crew||[]).map((n,j)=>{
+                        const isF=FOREMAN_ORDER.includes(n); const fc=FOREMAN_COLORS[n]; const isConflict=conflictNames.has(n);
+                        return <span key={j} style={{display:"inline-block",padding:"2px 7px",borderRadius:"4px",fontSize:"11px",
+                          background:isConflict?"rgba(239,68,68,0.12)":isF?`${fc}18`:"rgba(255,255,255,0.05)",
+                          color:isConflict?"#fca5a5":isF?fc:"#9ca3af",
+                          fontWeight:isConflict||isF?700:400,
+                          border:isConflict?"1px solid rgba(239,68,68,0.3)":isF?`1px solid ${fc}35`:"1px solid transparent"
+                        }}>{n}{isConflict&&" ⚠"}</span>;
+                      })}
+                    </div>
+                  }
+                </td>
+                <td style={{padding:"10px 8px",textAlign:"center"}}><PMBadge initials={job.calledIn}/></td>
+                <td style={{padding:"10px 8px",textAlign:"center"}}><FolderIcon val={job.jobFolder}/></td>
+              </tr>
+            );
+          })}</tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -221,9 +300,20 @@ function CrewRoster({crews,pools,allData}){
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"10px",marginBottom:"28px"}}>
         {foremanList.map(f=>{
           const crew=crews[f]; const color=FOREMAN_COLORS[f]||"#7a8599";
+          const allMembers=[f,...(crew?.members||[]).map(m=>m.name)];
+          const working=allMembers.filter(n=>DAY_ORDER.some(day=>(allData?.[day]?.jobs||[]).some(j=>(j.crew||[]).includes(n)))).length;
+          const total=allMembers.length;
+          const pct=total>0?Math.round((working/total)*100):0;
+          const utilColor=pct===100?"#10b981":pct>=60?"#e8a948":"#ef4444";
           return(
             <div key={f} style={{background:"rgba(255,255,255,0.02)",borderRadius:"8px",border:"1px solid rgba(255,255,255,0.06)",padding:"12px",borderTop:`3px solid ${color}`}}>
-              <div style={{fontSize:"9px",fontWeight:800,letterSpacing:"1px",color,marginBottom:"6px",paddingBottom:"5px",borderBottom:`1px solid ${color}20`}}>{f.toUpperCase()}</div>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"3px"}}>
+                <div style={{fontSize:"9px",fontWeight:800,letterSpacing:"1px",color}}>{f.toUpperCase()}</div>
+                <span style={{fontSize:"9px",fontWeight:700,color:utilColor,fontFamily:"'JetBrains Mono',monospace"}}>{working}/{total}</span>
+              </div>
+              <div style={{height:"3px",borderRadius:"2px",background:"rgba(255,255,255,0.06)",marginBottom:"7px"}}>
+                <div style={{height:"100%",borderRadius:"2px",width:`${pct}%`,background:utilColor,transition:"width 0.3s"}}/>
+              </div>
               <div style={{display:"flex",flexDirection:"column",gap:"3px"}}>
                 <button onClick={()=>handleSelect(f)} style={{
                   display:"flex",alignItems:"center",justifyContent:"space-between",
