@@ -8,6 +8,7 @@ const FOREMAN_COLORS = {
   Jeremy:"#4a9eff", Phil:"#f59e0b", Matt:"#10b981", Kritter:"#f472b6",
   Eddie:"#a78bfa", Craig:"#06b6d4", Ayotte:"#ef4444", Brian:"#84cc16",
 };
+const PM_COLORS = {D:"#4a9eff",R:"#f59e0b",G:"#10b981",J:"#a78bfa",JE:"#f472b6"};
 const REFRESH_MS = 2 * 60 * 1000; // 2 minutes — cache-busting makes this safe now
 
 function getTodayDayName(){ return DAY_ORDER[new Date().getDay()]; }
@@ -24,8 +25,7 @@ function QualBadge({code}){
 
 function PMBadge({initials}){
   if(!initials) return <span style={{color:"#444"}}>—</span>;
-  const p={D:"#4a9eff",R:"#f59e0b",G:"#10b981",J:"#a78bfa",JE:"#f472b6"};
-  return <span style={{display:"inline-block",fontSize:"10px",fontWeight:700,padding:"2px 8px",borderRadius:"4px",background:p[initials.toUpperCase()]||"#555",color:"#fff"}}>{initials.toUpperCase()}</span>;
+  return <span style={{display:"inline-block",fontSize:"10px",fontWeight:700,padding:"2px 8px",borderRadius:"4px",background:PM_COLORS[initials.toUpperCase()]||"#555",color:"#fff"}}>{initials.toUpperCase()}</span>;
 }
 
 function FolderIcon({val}){
@@ -152,17 +152,64 @@ function DayTracker({name,allData}){
   );
 }
 
+// ── Schedule Panel ───────────────────────────────────────────
+function SchedulePanel({label,accentColor,schedule,onClose}){
+  return(
+    <div style={{marginBottom:"24px",padding:"16px",background:"rgba(255,255,255,0.02)",borderRadius:"8px",border:`1px solid ${accentColor}35`}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"12px"}}>
+        <div style={{fontSize:"13px",fontWeight:800}}>
+          <span style={{color:accentColor}}>{label}</span>
+          <span style={{color:"#e2e8f0"}}>'s Week</span>
+        </div>
+        <button onClick={onClose} style={{background:"transparent",border:"none",color:"#4a5568",cursor:"pointer",fontSize:"18px",lineHeight:1,fontFamily:"inherit",padding:"0 4px"}}>×</button>
+      </div>
+      {schedule.length===0
+        ? <div style={{color:"#4a5568",fontStyle:"italic",fontSize:"12px"}}>Not scheduled for any jobs this week.</div>
+        : <div style={{display:"flex",flexDirection:"column",gap:"10px"}}>
+            {schedule.map(({day,date,jobs})=>(
+              <div key={day}>
+                <div style={{fontSize:"9px",fontWeight:800,letterSpacing:"1.2px",color:accentColor,marginBottom:"4px"}}>
+                  {day.toUpperCase()}{date&&<span style={{color:"#4a5568",fontWeight:400,fontFamily:"'JetBrains Mono',monospace"}}> · {formatDate(date)}</span>}
+                </div>
+                <div style={{display:"flex",flexDirection:"column",gap:"3px"}}>
+                  {jobs.map((job,i)=>(
+                    <div key={i} style={{display:"flex",alignItems:"center",gap:"10px",padding:"6px 10px",borderRadius:"4px",background:`${accentColor}08`,border:`1px solid ${accentColor}15`,fontSize:"12px",flexWrap:"wrap"}}>
+                      <span style={{fontWeight:700,color:"#e2e8f0",minWidth:"130px"}}>{job.customer}</span>
+                      {job.location&&<span style={{color:"#7a8599",fontSize:"11px",flex:1}}>{job.location}</span>}
+                      {job.onsiteTime&&<span style={{color:"#e8a948",fontSize:"11px",fontFamily:"'JetBrains Mono',monospace",whiteSpace:"nowrap"}}>{job.onsiteTime}</span>}
+                      {job.numMen!=null&&<span style={{color:"#f472b6",fontSize:"11px",fontFamily:"'JetBrains Mono',monospace",whiteSpace:"nowrap"}}>{job.numMen} men</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+      }
+    </div>
+  );
+}
+
 // ── Crew Roster ──────────────────────────────────────────────
 function CrewRoster({crews,pools,allData}){
   const [selectedPerson,setSelectedPerson]=useState(null);
+  const [selectedPM,setSelectedPM]=useState(null);
   if(!crews) return null;
   const foremanList=getForemanList(crews);
 
-  function handleSelect(name){ setSelectedPerson(p=>p===name?null:name); }
+  function handleSelect(name){ setSelectedPM(null); setSelectedPerson(p=>p===name?null:name); }
+  function handleSelectPM(pm){ setSelectedPerson(null); setSelectedPM(p=>p===pm?null:pm); }
 
   const personSchedule=selectedPerson
     ? DAY_ORDER.reduce((acc,day)=>{
         const jobs=(allData?.[day]?.jobs||[]).filter(j=>(j.crew||[]).includes(selectedPerson));
+        if(jobs.length) acc.push({day,date:allData[day]?.date,jobs});
+        return acc;
+      },[])
+    : [];
+
+  const pmSchedule=selectedPM
+    ? DAY_ORDER.reduce((acc,day)=>{
+        const jobs=(allData?.[day]?.jobs||[]).filter(j=>j.calledIn&&j.calledIn.toUpperCase()===selectedPM);
         if(jobs.length) acc.push({day,date:allData[day]?.date,jobs});
         return acc;
       },[])
@@ -176,12 +223,19 @@ function CrewRoster({crews,pools,allData}){
           const crew=crews[f]; const color=FOREMAN_COLORS[f]||"#7a8599";
           return(
             <div key={f} style={{background:"rgba(255,255,255,0.02)",borderRadius:"8px",border:"1px solid rgba(255,255,255,0.06)",padding:"12px",borderTop:`3px solid ${color}`}}>
-              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"4px"}}>
-                <button onClick={()=>handleSelect(f)} style={{background:"none",border:"none",padding:0,cursor:"pointer",fontSize:"13px",fontWeight:800,color,textAlign:"left",fontFamily:"inherit"}}>{f}</button>
-                <span style={{fontSize:"8px",fontWeight:700,letterSpacing:"1px",padding:"2px 6px",borderRadius:"3px",background:`${color}15`,color,border:`1px solid ${color}30`,flexShrink:0}}>FOREMAN</span>
-              </div>
-              <div style={{marginBottom:"8px"}}><DayTracker name={f} allData={allData}/></div>
+              <div style={{fontSize:"9px",fontWeight:800,letterSpacing:"1px",color,marginBottom:"6px",paddingBottom:"5px",borderBottom:`1px solid ${color}20`}}>{f.toUpperCase()}</div>
               <div style={{display:"flex",flexDirection:"column",gap:"3px"}}>
+                <button onClick={()=>handleSelect(f)} style={{
+                  display:"flex",alignItems:"center",justifyContent:"space-between",
+                  padding:"4px 8px",borderRadius:"4px",width:"100%",textAlign:"left",fontFamily:"inherit",
+                  background:selectedPerson===f?`${color}18`:"rgba(255,255,255,0.04)",
+                  border:selectedPerson===f?`1px solid ${color}40`:"1px solid rgba(255,255,255,0.06)",
+                  fontSize:"12px",color:selectedPerson===f?color:color,
+                  cursor:"pointer",transition:"all 0.12s",fontWeight:600,
+                }}>
+                  <span>{f}</span>
+                  <DayTracker name={f} allData={allData}/>
+                </button>
                 {(crew?.members||[]).map((m,i)=>
                   <button key={i} onClick={()=>handleSelect(m.name)} style={{
                     display:"flex",alignItems:"center",justifyContent:"space-between",
@@ -201,38 +255,29 @@ function CrewRoster({crews,pools,allData}){
         })}
       </div>
 
-      {selectedPerson&&(
-        <div style={{marginBottom:"24px",padding:"16px",background:"rgba(255,255,255,0.02)",borderRadius:"8px",border:"1px solid rgba(74,158,255,0.2)"}}>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"12px"}}>
-            <div style={{fontSize:"13px",fontWeight:800}}>
-              <span style={{color:"#4a9eff"}}>{selectedPerson}</span>
-              <span style={{color:"#e2e8f0"}}>'s Week</span>
-            </div>
-            <button onClick={()=>setSelectedPerson(null)} style={{background:"transparent",border:"none",color:"#4a5568",cursor:"pointer",fontSize:"18px",lineHeight:1,fontFamily:"inherit",padding:"0 4px"}}>×</button>
-          </div>
-          {personSchedule.length===0
-            ? <div style={{color:"#4a5568",fontStyle:"italic",fontSize:"12px"}}>Not scheduled for any jobs this week.</div>
-            : <div style={{display:"flex",flexDirection:"column",gap:"10px"}}>
-                {personSchedule.map(({day,date,jobs})=>(
-                  <div key={day}>
-                    <div style={{fontSize:"9px",fontWeight:800,letterSpacing:"1.2px",color:"#4a9eff",marginBottom:"4px"}}>
-                      {day.toUpperCase()}{date&&<span style={{color:"#4a5568",fontWeight:400,fontFamily:"'JetBrains Mono',monospace"}}> · {formatDate(date)}</span>}
-                    </div>
-                    <div style={{display:"flex",flexDirection:"column",gap:"3px"}}>
-                      {jobs.map((job,i)=>(
-                        <div key={i} style={{display:"flex",alignItems:"center",gap:"10px",padding:"6px 10px",borderRadius:"4px",background:"rgba(74,158,255,0.04)",border:"1px solid rgba(74,158,255,0.08)",fontSize:"12px"}}>
-                          <span style={{fontWeight:700,color:"#e2e8f0",minWidth:"130px"}}>{job.customer}</span>
-                          {job.location&&<span style={{color:"#7a8599",fontSize:"11px",flex:1}}>{job.location}</span>}
-                          {job.onsiteTime&&<span style={{color:"#e8a948",fontSize:"11px",fontFamily:"'JetBrains Mono',monospace",whiteSpace:"nowrap"}}>{job.onsiteTime}</span>}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-          }
-        </div>
-      )}
+      {selectedPerson&&<SchedulePanel label={selectedPerson} accentColor="#4a9eff" schedule={personSchedule} onClose={()=>setSelectedPerson(null)}/>}
+
+      {/* PM Section */}
+      <div style={{fontSize:"10px",fontWeight:800,letterSpacing:"1.5px",color:"#4a5568",marginBottom:"10px"}}>PROJECT MANAGERS</div>
+      <div style={{display:"flex",gap:"6px",marginBottom:"20px",flexWrap:"wrap"}}>
+        {Object.entries(PM_COLORS).map(([pm,color])=>{
+          const isSel=selectedPM===pm;
+          const jobCount=DAY_ORDER.reduce((n,day)=>n+(allData?.[day]?.jobs||[]).filter(j=>j.calledIn&&j.calledIn.toUpperCase()===pm).length,0);
+          return(
+            <button key={pm} onClick={()=>handleSelectPM(pm)} style={{
+              display:"flex",alignItems:"center",gap:"8px",padding:"8px 16px",borderRadius:"6px",cursor:"pointer",fontFamily:"inherit",
+              background:isSel?`${color}20`:"rgba(255,255,255,0.03)",
+              border:isSel?`1px solid ${color}55`:"1px solid rgba(255,255,255,0.07)",
+              transition:"all 0.12s",
+            }}>
+              <span style={{fontSize:"13px",fontWeight:800,color}}>{pm}</span>
+              <span style={{fontSize:"10px",color:"#4a5568",fontFamily:"'JetBrains Mono',monospace"}}>{jobCount} job{jobCount!==1?"s":""}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {selectedPM&&<SchedulePanel label={`PM ${selectedPM}`} accentColor={PM_COLORS[selectedPM]} schedule={pmSchedule} onClose={()=>setSelectedPM(null)}/>}
 
       <div style={{fontSize:"10px",fontWeight:800,letterSpacing:"1.5px",color:"#4a5568",marginBottom:"12px"}}>AVAILABLE POOL</div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"10px"}}>
