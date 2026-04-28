@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { initAuth, login, isConfigured } from './auth.js';
 import { fetchScheduleFromSharePoint } from './sharepoint.js';
 import { SAMPLE_DATA, FOREMAN_ORDER } from './sampleData.js';
@@ -74,11 +74,16 @@ function ConnectionBar({mode,lastRefresh,nextRefresh,isConnected,onConnect,onRef
 }
 
 // ── Operational Helpers ──────────────────────────────────────
+function isStopLabel(name){ return /^stop\s*\d+$/i.test(String(name).trim()); }
+function isDriverTag(name){ return /-[tvTV]$/.test(String(name).trim()); }
+function isNonPerson(name){ return isStopLabel(name)||isDriverTag(name); }
+
 function getConflictsForDay(dayData){
   const jobs=dayData?.jobs||[];
   const personMap={};
   for(const job of jobs){
     for(const name of (job.crew||[])){
+      if(isNonPerson(name)) continue; // skip stop labels and driver tags
       if(!personMap[name]) personMap[name]=new Map();
       // Same poJob = same job (regular + OT), don't count as conflict
       const key=job.poJob?String(job.poJob):`__num_${job.num}`;
@@ -91,14 +96,23 @@ function getConflictsForDay(dayData){
 }
 
 // ── Jobs Table ───────────────────────────────────────────────
-function JobsTable({dayData}){
+function JobsTable({dayData,flashedJobs}){
   if(!dayData?.jobs?.length) return <div style={{padding:"50px",textAlign:"center",color:"#444",fontStyle:"italic"}}>No jobs scheduled.</div>;
   const jobs=dayData.jobs;
   const conflicts=getConflictsForDay(dayData);
   const conflictNames=new Set(conflicts.map(c=>c.name));
   const unassigned=jobs.filter(j=>!j.crew?.length);
-  const hcMismatches=jobs.filter(j=>j.numMen!=null&&j.crew?.length>0&&j.numMen!==j.crew.length);
+  // Headcount: only count real people (exclude stop labels and driver tags)
+  const hcMismatches=jobs.filter(j=>{
+    if(j.numMen==null) return false;
+    const persons=(j.crew||[]).filter(n=>!isNonPerson(n));
+    return persons.length>0&&j.numMen!==persons.length;
+  });
   const hasIssues=conflicts.length>0||unassigned.length>0||hcMismatches.length>0;
+  // Day totals
+  const totalMen=jobs.reduce((s,j)=>s+(j.numMen||0),0);
+  const uniqueCrew=new Set(jobs.flatMap(j=>(j.crew||[]).filter(n=>!isNonPerson(n)))).size;
+  const totalTrucks=jobs.filter(j=>j.trucks&&!/^(na|n\/a)$/i.test(j.trucks.trim())).length;
   return(
     <div>
       {hasIssues&&(
@@ -130,13 +144,16 @@ function JobsTable({dayData}){
           {hcMismatches.length>0&&(
             <div style={{padding:"7px 12px",borderRadius:"6px",background:"rgba(251,146,60,0.07)",border:"1px solid rgba(251,146,60,0.18)",fontSize:"11px",lineHeight:1.7}}>
               <span style={{fontWeight:800,color:"#fb923c",marginRight:"8px",letterSpacing:"0.5px"}}>⚠ HEADCOUNT MISMATCH</span>
-              {hcMismatches.map((j,i)=>(
-                <span key={i}>
-                  <span style={{color:"#e2e8f0",fontWeight:600}}>#{j.num} {j.customer}</span>
-                  <span style={{color:"#4a5568",fontFamily:"'JetBrains Mono',monospace"}}> ({j.numMen} listed / {j.crew.length} named)</span>
-                  {i<hcMismatches.length-1&&<span style={{margin:"0 10px",color:"#2d3748"}}>·</span>}
-                </span>
-              ))}
+              {hcMismatches.map((j,i)=>{
+                const persons=(j.crew||[]).filter(n=>!isNonPerson(n));
+                return(
+                  <span key={i}>
+                    <span style={{color:"#e2e8f0",fontWeight:600}}>#{j.num} {j.customer}</span>
+                    <span style={{color:"#4a5568",fontFamily:"'JetBrains Mono',monospace"}}> ({j.numMen} listed / {persons.length} named)</span>
+                    {i<hcMismatches.length-1&&<span style={{margin:"0 10px",color:"#2d3748"}}>·</span>}
+                  </span>
+                );
+              })}
             </div>
           )}
         </div>
@@ -150,13 +167,16 @@ function JobsTable({dayData}){
           </tr></thead>
           <tbody>{jobs.map((job,i)=>{
             const noCrewFlag=!job.crew?.length;
-            const hcFlag=job.numMen!=null&&job.crew?.length>0&&job.numMen!==job.crew.length;
+            const persons=(job.crew||[]).filter(n=>!isNonPerson(n));
+            const hcFlag=job.numMen!=null&&persons.length>0&&job.numMen!==persons.length;
+            const isFlashed=flashedJobs?.has(`${dayData.day}-${job.num}`);
+            const pmColor=PM_COLORS[(job.calledIn||'').toUpperCase()];
             const rowBg=noCrewFlag?"rgba(245,158,11,0.05)":i%2?"rgba(255,255,255,0.012)":"transparent";
             return(
-              <tr key={i} style={{borderBottom:"1px solid rgba(255,255,255,0.03)",background:rowBg,transition:"background 0.12s"}}
+              <tr key={i} className={isFlashed?"job-flash":""} style={{borderBottom:"1px solid rgba(255,255,255,0.03)",background:rowBg,transition:"background 0.12s"}}
                 onMouseEnter={e=>e.currentTarget.style.background="rgba(74,158,255,0.04)"}
                 onMouseLeave={e=>e.currentTarget.style.background=rowBg}>
-                <td style={{padding:"10px 8px",fontWeight:800,color:"#4a9eff",fontFamily:"'JetBrains Mono',monospace"}}>{job.num}</td>
+                <td style={{padding:"10px 8px",fontWeight:800,color:"#4a9eff",fontFamily:"'JetBrains Mono',monospace",borderLeft:`3px solid ${pmColor||"transparent"}`}}>{job.num}</td>
                 <td style={{padding:"10px 8px",fontWeight:700,color:"#e2e8f0",maxWidth:"150px"}}>{job.customer}</td>
                 <td style={{padding:"10px 8px",color:"#7a8599",fontFamily:"'JetBrains Mono',monospace",fontSize:"11px"}}>{job.poJob||"—"}</td>
                 <td style={{padding:"10px 8px",color:"#7a8599",maxWidth:"190px",fontSize:"12px"}}>{job.location||"—"}</td>
@@ -164,14 +184,19 @@ function JobsTable({dayData}){
                 <td style={{padding:"10px 8px",color:"#7a8599",fontSize:"12px"}}>{job.trucks||"—"}</td>
                 <td style={{padding:"10px 8px",fontWeight:800,textAlign:"center",fontSize:"15px"}}>
                   <span style={{color:hcFlag?"#fb923c":job.numMen>=5?"#f472b6":"#e2e8f0"}}>{job.numMen||"—"}</span>
-                  {hcFlag&&<div style={{fontSize:"8px",color:"#fb923c",fontWeight:700,lineHeight:1.2}}>{job.crew.length} named</div>}
+                  {hcFlag&&<div style={{fontSize:"8px",color:"#fb923c",fontWeight:700,lineHeight:1.2}}>{persons.length} named</div>}
                 </td>
                 <td style={{padding:"10px 8px",maxWidth:"300px"}}>
                   {noCrewFlag
                     ?<span style={{color:"#4a5568",fontStyle:"italic",fontSize:"11px"}}>— none assigned —</span>
-                    :<div style={{display:"flex",flexWrap:"wrap",gap:"3px"}}>
+                    :<div style={{display:"flex",flexWrap:"wrap",gap:"3px",alignItems:"center"}}>
                       {(job.crew||[]).map((n,j)=>{
-                        const isF=FOREMAN_ORDER.includes(n); const fc=FOREMAN_COLORS[n]; const isConflict=conflictNames.has(n);
+                        const isF=FOREMAN_ORDER.includes(n); const fc=FOREMAN_COLORS[n];
+                        const isConflict=conflictNames.has(n);
+                        const isStop=isStopLabel(n);
+                        const isDrv=isDriverTag(n);
+                        if(isStop) return <span key={j} style={{fontSize:"9px",fontWeight:700,letterSpacing:"0.5px",color:"#2d3748",padding:"1px 5px",borderRadius:"3px",background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)"}}>{n.toUpperCase()}</span>;
+                        if(isDrv) return <span key={j} style={{display:"inline-block",padding:"2px 7px",borderRadius:"4px",fontSize:"11px",background:"rgba(139,92,246,0.08)",color:"#8b5cf6",fontWeight:500,border:"1px solid rgba(139,92,246,0.2)"}} title="Driver">{n}</span>;
                         return <span key={j} style={{display:"inline-block",padding:"2px 7px",borderRadius:"4px",fontSize:"11px",
                           background:isConflict?"rgba(239,68,68,0.12)":isF?`${fc}18`:"rgba(255,255,255,0.05)",
                           color:isConflict?"#fca5a5":isF?fc:"#9ca3af",
@@ -187,6 +212,16 @@ function JobsTable({dayData}){
               </tr>
             );
           })}</tbody>
+          <tfoot>
+            <tr style={{borderTop:"2px solid #1a2436",background:"rgba(255,255,255,0.02)"}}>
+              <td colSpan={6} style={{padding:"8px 8px",fontSize:"9px",fontWeight:800,letterSpacing:"1.2px",color:"#4a5568",textTransform:"uppercase"}}>Totals</td>
+              <td style={{padding:"8px",fontWeight:800,textAlign:"center",fontSize:"16px",color:"#e8a948"}}>{totalMen}</td>
+              <td style={{padding:"8px",fontSize:"11px",color:"#7a8599",fontFamily:"'JetBrains Mono',monospace"}}>
+                <span style={{color:"#e2e8f0",fontWeight:600}}>{uniqueCrew}</span> unique · <span style={{color:"#e2e8f0",fontWeight:600}}>{jobs.length}</span> jobs · <span style={{color:"#10b981",fontWeight:600}}>{totalTrucks}</span> w/ truck
+              </td>
+              <td colSpan={2}/>
+            </tr>
+          </tfoot>
         </table>
       </div>
     </div>
@@ -429,6 +464,7 @@ export default function App(){
   const [error,setError]=useState(null);
   const [fileMeta,setFileMeta]=useState(null);
   const [isRefreshing,setIsRefreshing]=useState(false);
+  const [flashedJobs,setFlashedJobs]=useState(new Set());
 
   // Try auto-login on mount
   useEffect(()=>{
@@ -469,7 +505,22 @@ export default function App(){
         setFileMeta(newData._meta);
         delete newData._meta;
       }
-      setData(newData);
+      // Detect changed jobs before updating state
+      setData(prev=>{
+        const changed=new Set();
+        for(const day of DAY_ORDER){
+          const oldJobs=prev?.[day]?.jobs||[];
+          for(const nj of (newData[day]?.jobs||[])){
+            const oj=oldJobs.find(j=>j.num===nj.num);
+            if(!oj||JSON.stringify(oj)!==JSON.stringify(nj)) changed.add(`${day}-${nj.num}`);
+          }
+        }
+        if(changed.size>0){
+          setFlashedJobs(changed);
+          setTimeout(()=>setFlashedJobs(new Set()),4000);
+        }
+        return newData;
+      });
       setLastRefresh(Date.now());
       setNextRefresh(Date.now()+REFRESH_MS);
     } catch(e){
@@ -502,6 +553,7 @@ export default function App(){
 
   return(
     <div style={{minHeight:"100vh",background:"#0a0f16",color:"#e2e8f0",fontFamily:"'Inter',-apple-system,sans-serif"}}>
+      <style>{`@keyframes jobFlash{0%,65%{background-color:rgba(16,185,129,0.18);}100%{background-color:transparent;}} .job-flash{animation:jobFlash 4s ease-out forwards;}`}</style>
       <ConnectionBar mode={mode} lastRefresh={lastRefresh} nextRefresh={nextRefresh} isConnected={mode==="live"} onConnect={handleConnect} onRefresh={refreshData} error={error} fileMeta={fileMeta} isRefreshing={isRefreshing}/>
 
       {/* Header */}
@@ -548,7 +600,7 @@ export default function App(){
             })}
           </div>
         }
-        {activeTab==="schedule"&&<JobsTable dayData={cur}/>}
+        {activeTab==="schedule"&&<JobsTable dayData={cur} flashedJobs={flashedJobs}/>}
         {activeTab==="roster"&&<CrewRoster crews={cur?.crews} pools={cur?.pools} allData={data}/>}
         {activeTab==="week"&&<WeekOverview data={data} selectedDay={selectedDay} onSelectDay={d=>{setSelectedDay(d);setActiveTab("schedule");}}/>}
       </div>
