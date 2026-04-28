@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { initAuth, login, isConfigured } from './auth.js';
 import { fetchScheduleFromSharePoint } from './sharepoint.js';
 import { SAMPLE_DATA, FOREMAN_ORDER } from './sampleData.js';
@@ -96,7 +96,7 @@ function getConflictsForDay(dayData){
 }
 
 // ── Jobs Table ───────────────────────────────────────────────
-function JobsTable({dayData}){
+function JobsTable({dayData,flashedJobs}){
   if(!dayData?.jobs?.length) return <div style={{padding:"50px",textAlign:"center",color:"#444",fontStyle:"italic"}}>No jobs scheduled.</div>;
   const jobs=dayData.jobs;
   const conflicts=getConflictsForDay(dayData);
@@ -109,6 +109,10 @@ function JobsTable({dayData}){
     return persons.length>0&&j.numMen!==persons.length;
   });
   const hasIssues=conflicts.length>0||unassigned.length>0||hcMismatches.length>0;
+  // Day totals
+  const totalMen=jobs.reduce((s,j)=>s+(j.numMen||0),0);
+  const uniqueCrew=new Set(jobs.flatMap(j=>(j.crew||[]).filter(n=>!isNonPerson(n)))).size;
+  const totalTrucks=jobs.filter(j=>j.trucks&&!/^(na|n\/a)$/i.test(j.trucks.trim())).length;
   return(
     <div>
       {hasIssues&&(
@@ -165,12 +169,14 @@ function JobsTable({dayData}){
             const noCrewFlag=!job.crew?.length;
             const persons=(job.crew||[]).filter(n=>!isNonPerson(n));
             const hcFlag=job.numMen!=null&&persons.length>0&&job.numMen!==persons.length;
+            const isFlashed=flashedJobs?.has(`${dayData.day}-${job.num}`);
+            const pmColor=PM_COLORS[(job.calledIn||'').toUpperCase()];
             const rowBg=noCrewFlag?"rgba(245,158,11,0.05)":i%2?"rgba(255,255,255,0.012)":"transparent";
             return(
-              <tr key={i} style={{borderBottom:"1px solid rgba(255,255,255,0.03)",background:rowBg,transition:"background 0.12s"}}
+              <tr key={i} className={isFlashed?"job-flash":""} style={{borderBottom:"1px solid rgba(255,255,255,0.03)",background:rowBg,transition:"background 0.12s"}}
                 onMouseEnter={e=>e.currentTarget.style.background="rgba(74,158,255,0.04)"}
                 onMouseLeave={e=>e.currentTarget.style.background=rowBg}>
-                <td style={{padding:"10px 8px",fontWeight:800,color:"#4a9eff",fontFamily:"'JetBrains Mono',monospace"}}>{job.num}</td>
+                <td style={{padding:"10px 8px",fontWeight:800,color:"#4a9eff",fontFamily:"'JetBrains Mono',monospace",borderLeft:`3px solid ${pmColor||"transparent"}`}}>{job.num}</td>
                 <td style={{padding:"10px 8px",fontWeight:700,color:"#e2e8f0",maxWidth:"150px"}}>{job.customer}</td>
                 <td style={{padding:"10px 8px",color:"#7a8599",fontFamily:"'JetBrains Mono',monospace",fontSize:"11px"}}>{job.poJob||"—"}</td>
                 <td style={{padding:"10px 8px",color:"#7a8599",maxWidth:"190px",fontSize:"12px"}}>{job.location||"—"}</td>
@@ -206,6 +212,16 @@ function JobsTable({dayData}){
               </tr>
             );
           })}</tbody>
+          <tfoot>
+            <tr style={{borderTop:"2px solid #1a2436",background:"rgba(255,255,255,0.02)"}}>
+              <td colSpan={6} style={{padding:"8px 8px",fontSize:"9px",fontWeight:800,letterSpacing:"1.2px",color:"#4a5568",textTransform:"uppercase"}}>Totals</td>
+              <td style={{padding:"8px",fontWeight:800,textAlign:"center",fontSize:"16px",color:"#e8a948"}}>{totalMen}</td>
+              <td style={{padding:"8px",fontSize:"11px",color:"#7a8599",fontFamily:"'JetBrains Mono',monospace"}}>
+                <span style={{color:"#e2e8f0",fontWeight:600}}>{uniqueCrew}</span> unique · <span style={{color:"#e2e8f0",fontWeight:600}}>{jobs.length}</span> jobs · <span style={{color:"#10b981",fontWeight:600}}>{totalTrucks}</span> w/ truck
+              </td>
+              <td colSpan={2}/>
+            </tr>
+          </tfoot>
         </table>
       </div>
     </div>
@@ -448,6 +464,7 @@ export default function App(){
   const [error,setError]=useState(null);
   const [fileMeta,setFileMeta]=useState(null);
   const [isRefreshing,setIsRefreshing]=useState(false);
+  const [flashedJobs,setFlashedJobs]=useState(new Set());
 
   // Try auto-login on mount
   useEffect(()=>{
@@ -488,7 +505,22 @@ export default function App(){
         setFileMeta(newData._meta);
         delete newData._meta;
       }
-      setData(newData);
+      // Detect changed jobs before updating state
+      setData(prev=>{
+        const changed=new Set();
+        for(const day of DAY_ORDER){
+          const oldJobs=prev?.[day]?.jobs||[];
+          for(const nj of (newData[day]?.jobs||[])){
+            const oj=oldJobs.find(j=>j.num===nj.num);
+            if(!oj||JSON.stringify(oj)!==JSON.stringify(nj)) changed.add(`${day}-${nj.num}`);
+          }
+        }
+        if(changed.size>0){
+          setFlashedJobs(changed);
+          setTimeout(()=>setFlashedJobs(new Set()),4000);
+        }
+        return newData;
+      });
       setLastRefresh(Date.now());
       setNextRefresh(Date.now()+REFRESH_MS);
     } catch(e){
@@ -521,6 +553,7 @@ export default function App(){
 
   return(
     <div style={{minHeight:"100vh",background:"#0a0f16",color:"#e2e8f0",fontFamily:"'Inter',-apple-system,sans-serif"}}>
+      <style>{`@keyframes jobFlash{0%,65%{background-color:rgba(16,185,129,0.18);}100%{background-color:transparent;}} .job-flash{animation:jobFlash 4s ease-out forwards;}`}</style>
       <ConnectionBar mode={mode} lastRefresh={lastRefresh} nextRefresh={nextRefresh} isConnected={mode==="live"} onConnect={handleConnect} onRefresh={refreshData} error={error} fileMeta={fileMeta} isRefreshing={isRefreshing}/>
 
       {/* Header */}
@@ -567,7 +600,7 @@ export default function App(){
             })}
           </div>
         }
-        {activeTab==="schedule"&&<JobsTable dayData={cur}/>}
+        {activeTab==="schedule"&&<JobsTable dayData={cur} flashedJobs={flashedJobs}/>}
         {activeTab==="roster"&&<CrewRoster crews={cur?.crews} pools={cur?.pools} allData={data}/>}
         {activeTab==="week"&&<WeekOverview data={data} selectedDay={selectedDay} onSelectDay={d=>{setSelectedDay(d);setActiveTab("schedule");}}/>}
       </div>
