@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { initAuth, login, isConfigured } from './auth.js';
-import { fetchScheduleFromSharePoint } from './sharepoint.js';
+import { fetchScheduleFromSharePoint, getWeekFileInfo } from './sharepoint.js';
 import { SAMPLE_DATA, FOREMAN_ORDER } from './sampleData.js';
 
 const DAY_ORDER = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
@@ -13,7 +13,11 @@ const REFRESH_MS = 2 * 60 * 1000; // 2 minutes — cache-busting makes this safe
 
 function getTodayDayName(){ return DAY_ORDER[new Date().getDay()]; }
 function formatDate(ds){ if(!ds) return ""; return new Date(ds+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"}); }
-function getWeekLabel(d){ const dt=DAY_ORDER.map(x=>d[x]?.date).filter(Boolean); if(dt.length<2) return "This Week"; const a=new Date(dt[0]+"T12:00:00"),b=new Date(dt[dt.length-1]+"T12:00:00"); return `${a.toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${b.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}`; }
+function getWeekLabel(d){ const dt=DAY_ORDER.map(x=>d[x]?.date).filter(Boolean); if(dt.length<2) return null; const a=new Date(dt[0]+"T12:00:00"),b=new Date(dt[dt.length-1]+"T12:00:00"); return `${a.toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${b.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}`; }
+function getSaturdayKey(date=new Date()){const info=getWeekFileInfo(date);const sat=info.saturdayDate;return `${sat.getFullYear()}-${String(sat.getMonth()+1).padStart(2,'0')}-${String(sat.getDate()).padStart(2,'0')}`;}
+function satKeyToLabel(satKey){const sat=new Date(satKey+'T12:00:00');const sun=new Date(sat);sun.setDate(sat.getDate()-6);return `${sun.toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${sat.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}`;}
+const SAMPLE_SAT="2026-03-28";
+const INITIAL_SAT=getSaturdayKey();
 
 // ── Small Components ─────────────────────────────────────────
 function QualBadge({code}){
@@ -455,7 +459,11 @@ function WeekOverview({data,selectedDay,onSelectDay}){
 
 // ── Main App ─────────────────────────────────────────────────
 export default function App(){
-  const [data,setData]=useState(SAMPLE_DATA);
+  const [weeksCache,setWeeksCache]=useState({[SAMPLE_SAT]:SAMPLE_DATA});
+  const [currentWeekSat,setCurrentWeekSat]=useState(SAMPLE_SAT);
+  const [loadingWeek,setLoadingWeek]=useState(null);
+  const currentWeekSatRef=useRef(SAMPLE_SAT);
+  const data=weeksCache[currentWeekSat]||{};
   const [selectedDay,setSelectedDay]=useState(getTodayDayName());
   const [mode,setMode]=useState("demo");
   const [lastRefresh,setLastRefresh]=useState(Date.now());
@@ -474,6 +482,8 @@ export default function App(){
         const token = await initAuth();
         if(token){
           setMode("live");
+          setCurrentWeekSat(INITIAL_SAT);
+          currentWeekSatRef.current=INITIAL_SAT;
           await refreshData();
         }
       } catch(e){ console.log("Auto-login skipped:", e); }
@@ -497,38 +507,70 @@ export default function App(){
   },[selectedDay,activeTab]);
 
   async function refreshData(){
+    const satKey=currentWeekSatRef.current;
     try {
       setError(null);
       setIsRefreshing(true);
-      const newData = await fetchScheduleFromSharePoint();
-      if (newData._meta) {
-        setFileMeta(newData._meta);
-        delete newData._meta;
-      }
-      // Detect changed jobs before updating state
-      setData(prev=>{
+      const newData=await fetchScheduleFromSharePoint(new Date(satKey+'T12:00:00'));
+      let meta=null;
+      if(newData._meta){meta=newData._meta;delete newData._meta;}
+      if(meta) setFileMeta(meta);
+      setWeeksCache(prev=>{
+        const oldData=prev[satKey]||{};
         const changed=new Set();
         for(const day of DAY_ORDER){
-          const oldJobs=prev?.[day]?.jobs||[];
+          const oldJobs=oldData[day]?.jobs||[];
           for(const nj of (newData[day]?.jobs||[])){
             const oj=oldJobs.find(j=>j.num===nj.num);
             if(!oj||JSON.stringify(oj)!==JSON.stringify(nj)) changed.add(`${day}-${nj.num}`);
           }
         }
-        if(changed.size>0){
-          setFlashedJobs(changed);
-          setTimeout(()=>setFlashedJobs(new Set()),4000);
-        }
-        return newData;
+        if(changed.size>0){setFlashedJobs(changed);setTimeout(()=>setFlashedJobs(new Set()),4000);}
+        return{...prev,[satKey]:newData};
       });
       setLastRefresh(Date.now());
       setNextRefresh(Date.now()+REFRESH_MS);
     } catch(e){
-      console.error("Refresh failed:", e);
+      console.error("Refresh failed:",e);
       setError(e.message);
     } finally {
       setIsRefreshing(false);
     }
+  }
+
+  const fetchingRef=useRef(new Set());
+  async function fetchWeek(satKey){
+    if(weeksCache[satKey]||fetchingRef.current.has(satKey)) return;
+    fetchingRef.current.add(satKey);
+    setLoadingWeek(satKey);
+    try {
+      const newData=await fetchScheduleFromSharePoint(new Date(satKey+'T12:00:00'));
+      let meta=null;
+      if(newData._meta){meta=newData._meta;delete newData._meta;}
+      setWeeksCache(prev=>({...prev,[satKey]:newData}));
+      if(satKey===currentWeekSatRef.current&&meta) setFileMeta(meta);
+    } catch(e){
+      console.error(`Failed to load week ${satKey}:`,e);
+      if(satKey===currentWeekSatRef.current) setError(e.message);
+    } finally {
+      fetchingRef.current.delete(satKey);
+      setLoadingWeek(null);
+    }
+  }
+
+  function navigateWeek(dir){
+    const cur=new Date(currentWeekSat+'T12:00:00');
+    cur.setDate(cur.getDate()+dir*7);
+    const newSat=getSaturdayKey(cur);
+    setCurrentWeekSat(newSat);
+    currentWeekSatRef.current=newSat;
+    if(mode==='live'&&!weeksCache[newSat]) fetchWeek(newSat);
+  }
+
+  function goToCurrentWeek(){
+    setCurrentWeekSat(INITIAL_SAT);
+    currentWeekSatRef.current=INITIAL_SAT;
+    if(mode==='live'&&!weeksCache[INITIAL_SAT]) fetchWeek(INITIAL_SAT);
   }
 
   async function handleConnect(){
@@ -540,6 +582,8 @@ export default function App(){
       setError(null);
       await login();
       setMode("live");
+      setCurrentWeekSat(INITIAL_SAT);
+      currentWeekSatRef.current=INITIAL_SAT;
       await refreshData();
     } catch(e){
       setError(e.message);
@@ -561,7 +605,13 @@ export default function App(){
         <div>
           <div style={{fontSize:"9px",fontWeight:800,letterSpacing:"2.5px",color:"#4a9eff",marginBottom:"3px"}}>SCHEDULING TEAM</div>
           <h1 style={{margin:0,fontSize:"26px",fontWeight:900,letterSpacing:"-0.5px"}}>Daily Jobs Dashboard</h1>
-          <div style={{fontSize:"12px",color:"#4a5568",marginTop:"3px"}}>{getWeekLabel(data)}</div>
+          <div style={{display:"flex",alignItems:"center",gap:"6px",marginTop:"4px"}}>
+            <button onClick={()=>navigateWeek(-1)} style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",color:"#7a8599",cursor:"pointer",borderRadius:"4px",padding:"1px 8px",fontSize:"15px",fontFamily:"inherit",lineHeight:1.4}}>‹</button>
+            <span style={{fontSize:"12px",color:"#4a5568",minWidth:"210px",textAlign:"center"}}>{getWeekLabel(data)||satKeyToLabel(currentWeekSat)}</span>
+            <button onClick={()=>navigateWeek(1)} style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",color:"#7a8599",cursor:"pointer",borderRadius:"4px",padding:"1px 8px",fontSize:"15px",fontFamily:"inherit",lineHeight:1.4}}>›</button>
+            {currentWeekSat!==INITIAL_SAT&&<button onClick={goToCurrentWeek} style={{background:"rgba(16,185,129,0.08)",border:"1px solid rgba(16,185,129,0.2)",color:"#10b981",cursor:"pointer",borderRadius:"4px",padding:"2px 9px",fontSize:"10px",fontFamily:"inherit",fontWeight:700,letterSpacing:"0.5px"}}>TODAY</button>}
+            {loadingWeek===currentWeekSat&&<span style={{fontSize:"10px",color:"#4a9eff",fontFamily:"'JetBrains Mono',monospace"}}>⟳ Loading...</span>}
+          </div>
         </div>
         <div style={{display:"flex",gap:"10px"}}>
           {[{v:totalJobs,l:"JOBS",c:"#4a9eff"},{v:totalMen,l:"MEN",c:"#e8a948"},{v:totalTrucks,l:"TRUCKS",c:"#10b981"}].map(s=>
@@ -588,21 +638,33 @@ export default function App(){
 
       {/* Content */}
       <div style={{margin:"0 24px 24px",background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.05)",borderRadius:"0 8px 8px 8px",padding:"20px",minHeight:"420px"}}>
-        {(activeTab==="schedule"||activeTab==="roster")&&
-          <div style={{display:"flex",gap:"3px",marginBottom:"14px",borderBottom:"1px solid rgba(255,255,255,0.04)",paddingBottom:"10px"}}>
-            {DAY_ORDER.map(d=>{const isToday=d===getTodayDayName(),isSel=d===selectedDay;
-              return <button key={d} onClick={()=>setSelectedDay(d)} style={{
-                padding:"6px 14px",borderRadius:"6px",cursor:"pointer",fontSize:"11px",fontWeight:isSel?700:500,fontFamily:"inherit",
-                background:isSel?"rgba(74,158,255,0.1)":"transparent",border:isSel?"1px solid rgba(74,158,255,0.25)":"1px solid transparent",
-                color:isSel?"#4a9eff":isToday?"#10b981":"#4a5568"}}>
-                {d.substring(0,3)}{isToday&&!isSel&&<span style={{display:"inline-block",width:"4px",height:"4px",borderRadius:"50%",background:"#10b981",marginLeft:"4px",verticalAlign:"middle"}}/>}
-              </button>;
-            })}
-          </div>
+        {loadingWeek===currentWeekSat&&!weeksCache[currentWeekSat]
+          ? <div style={{padding:"80px",textAlign:"center",color:"#4a5568"}}>
+              <div style={{fontSize:"28px",marginBottom:"12px",animation:"spin 1s linear infinite"}}>⟳</div>
+              <div>Loading {satKeyToLabel(currentWeekSat)}…</div>
+            </div>
+          : Object.keys(data).length===0
+            ? <div style={{padding:"80px",textAlign:"center",color:"#4a5568",fontStyle:"italic"}}>
+                {mode==="live"?"No data found for this week.":"Connect to SharePoint to load this week, or use ‹ › to browse to the sample week (Mar 22–28, 2026)."}
+              </div>
+            : <>
+                {(activeTab==="schedule"||activeTab==="roster")&&
+                  <div style={{display:"flex",gap:"3px",marginBottom:"14px",borderBottom:"1px solid rgba(255,255,255,0.04)",paddingBottom:"10px"}}>
+                    {DAY_ORDER.map(d=>{const isToday=d===getTodayDayName(),isSel=d===selectedDay;
+                      return <button key={d} onClick={()=>setSelectedDay(d)} style={{
+                        padding:"6px 14px",borderRadius:"6px",cursor:"pointer",fontSize:"11px",fontWeight:isSel?700:500,fontFamily:"inherit",
+                        background:isSel?"rgba(74,158,255,0.1)":"transparent",border:isSel?"1px solid rgba(74,158,255,0.25)":"1px solid transparent",
+                        color:isSel?"#4a9eff":isToday?"#10b981":"#4a5568"}}>
+                        {d.substring(0,3)}{isToday&&!isSel&&<span style={{display:"inline-block",width:"4px",height:"4px",borderRadius:"50%",background:"#10b981",marginLeft:"4px",verticalAlign:"middle"}}/>}
+                      </button>;
+                    })}
+                  </div>
+                }
+                {activeTab==="schedule"&&<JobsTable dayData={cur} flashedJobs={flashedJobs}/>}
+                {activeTab==="roster"&&<CrewRoster crews={cur?.crews} pools={cur?.pools} allData={data}/>}
+                {activeTab==="week"&&<WeekOverview data={data} selectedDay={selectedDay} onSelectDay={d=>{setSelectedDay(d);setActiveTab("schedule");}}/>}
+              </>
         }
-        {activeTab==="schedule"&&<JobsTable dayData={cur} flashedJobs={flashedJobs}/>}
-        {activeTab==="roster"&&<CrewRoster crews={cur?.crews} pools={cur?.pools} allData={data}/>}
-        {activeTab==="week"&&<WeekOverview data={data} selectedDay={selectedDay} onSelectDay={d=>{setSelectedDay(d);setActiveTab("schedule");}}/>}
       </div>
 
       {/* Legend */}

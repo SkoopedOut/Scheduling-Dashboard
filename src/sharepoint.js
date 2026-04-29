@@ -52,11 +52,11 @@ function getWeekFileInfo(date = new Date()) {
 // ============================================================
 // Fetch the Excel file from SharePoint via Microsoft Graph
 // ============================================================
-export async function fetchScheduleFromSharePoint() {
+export async function fetchScheduleFromSharePoint(date = new Date()) {
   const token = await getToken();
   if (!token) throw new Error('Not authenticated');
 
-  const fileInfo = getWeekFileInfo();
+  const fileInfo = getWeekFileInfo(date);
   const encodedPath = encodeURIComponent(fileInfo.fullPath).replace(/%2F/g, '/');
 
   // Cache-bust parameter — forces Graph to skip CDN/edge cache
