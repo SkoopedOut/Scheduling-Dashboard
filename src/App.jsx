@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, Fragment } from 'react';
 import { initAuth, login, isConfigured } from './auth.js';
 import { fetchScheduleFromSharePoint, getWeekFileInfo } from './sharepoint.js';
 import { SAMPLE_DATA, FOREMAN_ORDER } from './sampleData.js';
@@ -46,11 +46,13 @@ function ConnectionBar({mode,lastRefresh,nextRefresh,isConnected,onConnect,onRef
   const modifiedStr = fileMeta?.lastModified
     ? `File saved ${new Date(fileMeta.lastModified).toLocaleTimeString()}`
     : '';
+  const fileNameStr = fileMeta?.fileName || '';
   return(
     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"7px 20px",fontSize:"11px",fontFamily:"'JetBrains Mono',monospace",background:error?"rgba(239,68,68,0.06)":isConnected?"rgba(16,185,129,0.06)":"rgba(245,158,11,0.06)",borderBottom:`1px solid ${error?"rgba(239,68,68,0.15)":isConnected?"rgba(16,185,129,0.15)":"rgba(245,158,11,0.15)"}`,color:"#6b7789"}}>
       <div style={{display:"flex",alignItems:"center",gap:"10px"}}>
         <span style={{width:"6px",height:"6px",borderRadius:"50%",background:error?"#ef4444":isConnected?"#10b981":"#f59e0b"}}/>
         <span>{error ? `ERROR: ${error}` : mode==="demo"?"DEMO MODE — Sample data":"LIVE — SharePoint connected"}</span>
+        {fileNameStr && !error && <span style={{color:"#4a5568"}} title={fileMeta?.matchedBy?`Matched by: ${fileMeta.matchedBy}`:undefined}>· {fileNameStr}</span>}
         {modifiedStr && <span style={{color:"#4a5568"}}>· {modifiedStr}</span>}
       </div>
       <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
@@ -82,6 +84,28 @@ function isStopLabel(name){ return /^stop\s*\d+$/i.test(String(name).trim()); }
 function isDriverTag(name){ return /-[tvTV]$/.test(String(name).trim()); }
 function isNonPerson(name){ return isStopLabel(name)||isDriverTag(name); }
 
+// Parse onsite times like "6am", "6:30am", "2pm", "14:00" into minutes-after-midnight
+function parseTimeToMinutes(t){
+  if(t==null) return null;
+  const s=String(t).trim().toLowerCase();
+  if(!s||/tbd|n\/a|^na$/.test(s)) return null;
+  const m=s.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/);
+  if(!m) return null;
+  let h=parseInt(m[1],10);
+  const min=m[2]?parseInt(m[2],10):0;
+  if(h>23||min>59) return null;
+  const mer=m[3];
+  if(mer==="pm"&&h!==12) h+=12;
+  else if(mer==="am"&&h===12) h=0;
+  else if(!mer&&h>=1&&h<=5) h+=12; // bare "3" or "4:30" = afternoon (pre-dawn jobs are written with "am")
+  return h*60+min;
+}
+// OT = starts before 6:00 AM, or at/after 2:00 PM
+function isOvertimeStart(t){
+  const m=parseTimeToMinutes(t);
+  return m!=null&&(m<360||m>=840);
+}
+
 function getConflictsForDay(dayData){
   const jobs=dayData?.jobs||[];
   const personMap={};
@@ -103,8 +127,12 @@ function getConflictsForDay(dayData){
 function JobsTable({dayData,flashedJobs}){
   if(!dayData?.jobs?.length) return <div style={{padding:"50px",textAlign:"center",color:"#444",fontStyle:"italic"}}>No jobs scheduled.</div>;
   const jobs=dayData.jobs;
-  const conflicts=getConflictsForDay(dayData);
-  const conflictNames=new Set(conflicts.map(c=>c.name));
+  const multiJobs=getConflictsForDay(dayData); // people on more than one job today (informational, not a conflict)
+  const multiCounts=new Map(multiJobs.map(c=>[c.name,c.jobs.length]));
+  // Group overtime jobs together at the bottom, keeping sheet order within each group
+  const regularJobs=jobs.filter(j=>!isOvertimeStart(j.onsiteTime));
+  const otJobs=jobs.filter(j=>isOvertimeStart(j.onsiteTime));
+  const orderedJobs=[...regularJobs,...otJobs];
   const unassigned=jobs.filter(j=>!j.crew?.length);
   // Headcount: only count real people (exclude stop labels and driver tags)
   const hcMismatches=jobs.filter(j=>{
@@ -112,7 +140,7 @@ function JobsTable({dayData,flashedJobs}){
     const persons=(j.crew||[]).filter(n=>!isNonPerson(n));
     return persons.length>0&&j.numMen!==persons.length;
   });
-  const hasIssues=conflicts.length>0||unassigned.length>0||hcMismatches.length>0;
+  const hasIssues=multiJobs.length>0||unassigned.length>0||hcMismatches.length>0;
   // Day totals
   const totalMen=jobs.reduce((s,j)=>s+(j.numMen||0),0);
   const uniqueCrew=new Set(jobs.flatMap(j=>(j.crew||[]).filter(n=>!isNonPerson(n)))).size;
@@ -121,15 +149,15 @@ function JobsTable({dayData,flashedJobs}){
     <div>
       {hasIssues&&(
         <div style={{display:"flex",flexDirection:"column",gap:"5px",marginBottom:"14px"}}>
-          {conflicts.length>0&&(
-            <div style={{padding:"7px 12px",borderRadius:"6px",background:"rgba(239,68,68,0.07)",border:"1px solid rgba(239,68,68,0.18)",fontSize:"11px",lineHeight:1.7}}>
-              <span style={{fontWeight:800,color:"#ef4444",marginRight:"8px",letterSpacing:"0.5px"}}>⚠ CONFLICTS</span>
-              {conflicts.map((c,i)=>(
+          {multiJobs.length>0&&(
+            <div style={{padding:"7px 12px",borderRadius:"6px",background:"rgba(56,189,248,0.06)",border:"1px solid rgba(56,189,248,0.18)",fontSize:"11px",lineHeight:1.7}}>
+              <span style={{fontWeight:800,color:"#38bdf8",marginRight:"8px",letterSpacing:"0.5px"}}>⇄ ON MULTIPLE JOBS</span>
+              {multiJobs.map((c,i)=>(
                 <span key={i}>
-                  <span style={{color:"#fca5a5",fontWeight:700}}>{c.name}</span>
+                  <span style={{color:"#7dd3fc",fontWeight:700}}>{c.name}</span>
                   <span style={{color:"#4a5568"}}> on </span>
                   {c.jobs.map((j,ji)=><span key={ji}><span style={{color:"#e2e8f0"}}>{j.customer}</span>{ji<c.jobs.length-1&&<span style={{color:"#4a5568"}}> & </span>}</span>)}
-                  {i<conflicts.length-1&&<span style={{margin:"0 10px",color:"#2d3748"}}>·</span>}
+                  {i<multiJobs.length-1&&<span style={{margin:"0 10px",color:"#2d3748"}}>·</span>}
                 </span>
               ))}
             </div>
@@ -169,22 +197,34 @@ function JobsTable({dayData,flashedJobs}){
               <th key={h} style={{padding:"10px 8px",textAlign:"left",fontSize:"9px",fontWeight:800,letterSpacing:"1.2px",color:"#4a5568",textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
             )}
           </tr></thead>
-          <tbody>{jobs.map((job,i)=>{
+          <tbody>{orderedJobs.map((job,i)=>{
             const noCrewFlag=!job.crew?.length;
             const persons=(job.crew||[]).filter(n=>!isNonPerson(n));
             const hcFlag=job.numMen!=null&&persons.length>0&&job.numMen!==persons.length;
             const isFlashed=flashedJobs?.has(`${dayData.day}-${job.num}`);
             const pmColor=PM_COLORS[(job.calledIn||'').toUpperCase()];
-            const rowBg=noCrewFlag?"rgba(245,158,11,0.05)":i%2?"rgba(255,255,255,0.012)":"transparent";
+            const isOT=isOvertimeStart(job.onsiteTime);
+            const firstOT=isOT&&otJobs.length>0&&job===otJobs[0]&&regularJobs.length>0;
+            const rowBg=isOT?"rgba(250,204,21,0.09)":noCrewFlag?"rgba(245,158,11,0.05)":i%2?"rgba(255,255,255,0.012)":"transparent";
+            const hoverBg=isOT?"rgba(250,204,21,0.16)":"rgba(74,158,255,0.04)";
             return(
-              <tr key={i} className={isFlashed?"job-flash":""} style={{borderBottom:"1px solid rgba(255,255,255,0.03)",background:rowBg,transition:"background 0.12s"}}
-                onMouseEnter={e=>e.currentTarget.style.background="rgba(74,158,255,0.04)"}
+              <Fragment key={`${job.num}-${i}`}>
+              {firstOT&&(
+                <tr><td colSpan={10} style={{padding:"14px 8px 6px",fontSize:"9px",fontWeight:800,letterSpacing:"1.5px",color:"#facc15",borderBottom:"1px solid rgba(250,204,21,0.25)"}}>
+                  ⏱ OVERTIME — starts before 6:00 AM or 2:00 PM &amp; later
+                </td></tr>
+              )}
+              <tr className={isFlashed?"job-flash":""} style={{borderBottom:"1px solid rgba(255,255,255,0.03)",background:rowBg,transition:"background 0.12s"}}
+                onMouseEnter={e=>e.currentTarget.style.background=hoverBg}
                 onMouseLeave={e=>e.currentTarget.style.background=rowBg}>
-                <td style={{padding:"10px 8px",fontWeight:800,color:"#4a9eff",fontFamily:"'JetBrains Mono',monospace",borderLeft:`3px solid ${pmColor||"transparent"}`}}>{job.num}</td>
+                <td style={{padding:"10px 8px",fontWeight:800,color:isOT?"#facc15":"#4a9eff",fontFamily:"'JetBrains Mono',monospace",borderLeft:`3px solid ${isOT?"#facc15":pmColor||"transparent"}`}}>{job.num}</td>
                 <td style={{padding:"10px 8px",fontWeight:700,color:"#e2e8f0",maxWidth:"150px"}}>{job.customer}</td>
                 <td style={{padding:"10px 8px",color:"#7a8599",fontFamily:"'JetBrains Mono',monospace",fontSize:"11px"}}>{job.poJob||"—"}</td>
                 <td style={{padding:"10px 8px",color:"#7a8599",maxWidth:"190px",fontSize:"12px"}}>{job.location||"—"}</td>
-                <td style={{padding:"10px 8px",fontWeight:700,color:"#e8a948",whiteSpace:"nowrap",fontFamily:"'JetBrains Mono',monospace",fontSize:"12px"}}>{job.onsiteTime||"TBD"}</td>
+                <td style={{padding:"10px 8px",fontWeight:700,color:isOT?"#facc15":"#e8a948",whiteSpace:"nowrap",fontFamily:"'JetBrains Mono',monospace",fontSize:"12px"}}>
+                  {job.onsiteTime||"TBD"}
+                  {isOT&&<span style={{marginLeft:"5px",fontSize:"8px",fontWeight:800,letterSpacing:"0.5px",padding:"1px 5px",borderRadius:"3px",background:"rgba(250,204,21,0.18)",color:"#facc15",border:"1px solid rgba(250,204,21,0.35)"}}>OT</span>}
+                </td>
                 <td style={{padding:"10px 8px",color:"#7a8599",fontSize:"12px"}}>{job.trucks||"—"}</td>
                 <td style={{padding:"10px 8px",fontWeight:800,textAlign:"center",fontSize:"15px"}}>
                   <span style={{color:hcFlag?"#fb923c":job.numMen>=5?"#f472b6":"#e2e8f0"}}>{job.numMen||"—"}</span>
@@ -196,17 +236,17 @@ function JobsTable({dayData,flashedJobs}){
                     :<div style={{display:"flex",flexWrap:"wrap",gap:"3px",alignItems:"center"}}>
                       {(job.crew||[]).map((n,j)=>{
                         const isF=FOREMAN_ORDER.includes(n); const fc=FOREMAN_COLORS[n];
-                        const isConflict=conflictNames.has(n);
+                        const multiCount=multiCounts.get(n);
                         const isStop=isStopLabel(n);
                         const isDrv=isDriverTag(n);
                         if(isStop) return <span key={j} style={{fontSize:"9px",fontWeight:700,letterSpacing:"0.5px",color:"#2d3748",padding:"1px 5px",borderRadius:"3px",background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)"}}>{n.toUpperCase()}</span>;
                         if(isDrv) return <span key={j} style={{display:"inline-block",padding:"2px 7px",borderRadius:"4px",fontSize:"11px",background:"rgba(139,92,246,0.08)",color:"#8b5cf6",fontWeight:500,border:"1px solid rgba(139,92,246,0.2)"}} title="Driver">{n}</span>;
                         return <span key={j} style={{display:"inline-block",padding:"2px 7px",borderRadius:"4px",fontSize:"11px",
-                          background:isConflict?"rgba(239,68,68,0.12)":isF?`${fc}18`:"rgba(255,255,255,0.05)",
-                          color:isConflict?"#fca5a5":isF?fc:"#9ca3af",
-                          fontWeight:isConflict||isF?700:400,
-                          border:isConflict?"1px solid rgba(239,68,68,0.3)":isF?`1px solid ${fc}35`:"1px solid transparent"
-                        }}>{n}{isConflict&&" ⚠"}</span>;
+                          background:isF?`${fc}18`:"rgba(255,255,255,0.05)",
+                          color:isF?fc:"#9ca3af",
+                          fontWeight:isF?700:400,
+                          border:multiCount?"1px solid rgba(56,189,248,0.45)":isF?`1px solid ${fc}35`:"1px solid transparent"
+                        }} title={multiCount?`On ${multiCount} jobs today`:undefined}>{n}{multiCount&&<span style={{marginLeft:"4px",fontSize:"9px",fontWeight:800,color:"#38bdf8"}}>×{multiCount}</span>}</span>;
                       })}
                     </div>
                   }
@@ -214,6 +254,7 @@ function JobsTable({dayData,flashedJobs}){
                 <td style={{padding:"10px 8px",textAlign:"center"}}><PMBadge initials={job.calledIn}/></td>
                 <td style={{padding:"10px 8px",textAlign:"center"}}><FolderIcon val={job.jobFolder}/></td>
               </tr>
+              </Fragment>
             );
           })}</tbody>
           <tfoot>
@@ -221,7 +262,7 @@ function JobsTable({dayData,flashedJobs}){
               <td colSpan={6} style={{padding:"8px 8px",fontSize:"9px",fontWeight:800,letterSpacing:"1.2px",color:"#4a5568",textTransform:"uppercase"}}>Totals</td>
               <td style={{padding:"8px",fontWeight:800,textAlign:"center",fontSize:"16px",color:"#e8a948"}}>{totalMen}</td>
               <td style={{padding:"8px",fontSize:"11px",color:"#7a8599",fontFamily:"'JetBrains Mono',monospace"}}>
-                <span style={{color:"#e2e8f0",fontWeight:600}}>{uniqueCrew}</span> unique · <span style={{color:"#e2e8f0",fontWeight:600}}>{jobs.length}</span> jobs · <span style={{color:"#10b981",fontWeight:600}}>{totalTrucks}</span> w/ truck
+                <span style={{color:"#e2e8f0",fontWeight:600}}>{uniqueCrew}</span> unique · <span style={{color:"#e2e8f0",fontWeight:600}}>{jobs.length}</span> jobs{otJobs.length>0&&<> · <span style={{color:"#facc15",fontWeight:600}}>{otJobs.length}</span> OT</>} · <span style={{color:"#10b981",fontWeight:600}}>{totalTrucks}</span> w/ truck
               </td>
               <td colSpan={2}/>
             </tr>
@@ -438,6 +479,7 @@ function WeekOverview({data,selectedDay,onSelectDay}){
     <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:"8px"}}>
       {DAY_ORDER.map(dn=>{
         const d=data[dn]; const jc=d?.jobs?.length||0; const tm=d?.jobs?.reduce((s,j)=>s+(j.numMen||0),0)||0;
+        const otc=(d?.jobs||[]).filter(j=>isOvertimeStart(j.onsiteTime)).length;
         const isToday=dn===getTodayDayName(); const isSel=dn===selectedDay;
         return(
           <button key={dn} onClick={()=>onSelectDay(dn)} style={{
@@ -449,6 +491,7 @@ function WeekOverview({data,selectedDay,onSelectDay}){
             <div style={{fontSize:"28px",fontWeight:900,color:"#e2e8f0",lineHeight:1}}>{jc}</div>
             <div style={{fontSize:"9px",color:"#4a5568",marginTop:"2px"}}>{jc===1?"JOB":"JOBS"}</div>
             <div style={{fontSize:"12px",color:"#e8a948",fontWeight:700,marginTop:"8px",fontFamily:"'JetBrains Mono',monospace"}}>{tm} <span style={{fontSize:"9px",color:"#444"}}>MEN</span></div>
+            {otc>0&&<div style={{fontSize:"9px",fontWeight:800,color:"#facc15",marginTop:"4px",fontFamily:"'JetBrains Mono',monospace"}}>⏱ {otc} OT</div>}
             {isToday&&<div style={{fontSize:"8px",fontWeight:800,letterSpacing:"1.2px",color:"#10b981",marginTop:"6px"}}>TODAY</div>}
           </button>
         );
@@ -651,11 +694,12 @@ export default function App(){
                 {(activeTab==="schedule"||activeTab==="roster")&&
                   <div style={{display:"flex",gap:"3px",marginBottom:"14px",borderBottom:"1px solid rgba(255,255,255,0.04)",paddingBottom:"10px"}}>
                     {DAY_ORDER.map(d=>{const isToday=d===getTodayDayName(),isSel=d===selectedDay;
+                      const djc=data[d]?.jobs?.length||0;
                       return <button key={d} onClick={()=>setSelectedDay(d)} style={{
                         padding:"6px 14px",borderRadius:"6px",cursor:"pointer",fontSize:"11px",fontWeight:isSel?700:500,fontFamily:"inherit",
                         background:isSel?"rgba(74,158,255,0.1)":"transparent",border:isSel?"1px solid rgba(74,158,255,0.25)":"1px solid transparent",
-                        color:isSel?"#4a9eff":isToday?"#10b981":"#4a5568"}}>
-                        {d.substring(0,3)}{isToday&&!isSel&&<span style={{display:"inline-block",width:"4px",height:"4px",borderRadius:"50%",background:"#10b981",marginLeft:"4px",verticalAlign:"middle"}}/>}
+                        color:isSel?"#4a9eff":isToday?"#10b981":djc>0?"#7a8599":"#3a4254"}}>
+                        {d.substring(0,3)}{djc>0&&<span style={{marginLeft:"5px",fontSize:"9px",fontWeight:800,fontFamily:"'JetBrains Mono',monospace",color:isSel?"#4a9eff":"#4a5568"}}>{djc}</span>}{isToday&&!isSel&&<span style={{display:"inline-block",width:"4px",height:"4px",borderRadius:"50%",background:"#10b981",marginLeft:"4px",verticalAlign:"middle"}}/>}
                       </button>;
                     })}
                   </div>
@@ -682,6 +726,13 @@ export default function App(){
         <div style={{display:"flex",alignItems:"center",gap:"6px"}}>
           <span style={{fontWeight:800,letterSpacing:"1px"}}>FOLDER:</span>
           <span style={{color:"#10b981"}}>✓</span> Yes <span style={{color:"#ef4444"}}>✗</span> No <span style={{color:"#a78bfa",fontWeight:700}}>SM</span> Site Map
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:"6px"}}>
+          <span style={{display:"inline-block",width:"14px",height:"10px",borderRadius:"2px",background:"rgba(250,204,21,0.25)",border:"1px solid rgba(250,204,21,0.5)"}}/>
+          <span style={{color:"#facc15",fontWeight:700}}>OT</span><span style={{color:"#6b7789"}}>= starts before 6 AM or 2 PM &amp; later</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:"6px"}}>
+          <span style={{color:"#38bdf8",fontWeight:800}}>×2</span><span style={{color:"#6b7789"}}>= on multiple jobs that day</span>
         </div>
       </div>
     </div>

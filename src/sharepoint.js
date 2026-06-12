@@ -50,6 +50,144 @@ function getWeekFileInfo(date = new Date()) {
 }
 
 // ============================================================
+// Flexible name matching helpers
+// The file SHOULD be named "3-28-2026 Log Book.xlsx" but people
+// save it as "3-28-26 Log Book", "3282026_Log_Book_", "logbook 3-28",
+// etc. We normalize names (strip everything but letters/digits)
+// and look for the Saturday date in any common form. The date in
+// each tab's K2 cell is the final source of truth.
+// ============================================================
+function normalizeName(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function dateVariants(saturday) {
+  const m = saturday.getMonth() + 1;
+  const d = saturday.getDate();
+  const y = saturday.getFullYear();
+  const yy = String(y).slice(-2);
+  const mm = String(m).padStart(2, '0');
+  const dd = String(d).padStart(2, '0');
+  // All collapse to digit-runs after normalizeName(), e.g. "3-28-2026" -> "3282026"
+  return [...new Set([
+    `${m}${d}${y}`, `${mm}${dd}${y}`, `${m}${dd}${y}`, `${mm}${d}${y}`,
+    `${m}${d}${yy}`, `${mm}${dd}${yy}`, `${m}${dd}${yy}`, `${mm}${d}${yy}`,
+  ])];
+}
+
+function folderVariants(saturday) {
+  const m = saturday.getMonth() + 1;
+  const mm = String(m).padStart(2, '0');
+  const monthName = saturday.toLocaleString('en-US', { month: 'long' }).toLowerCase();
+  const monthShort = monthName.slice(0, 3);
+  const y = saturday.getFullYear();
+  const yy = String(y).slice(-2);
+  return [...new Set([
+    `${mm}${monthName}${yy}`, `${m}${monthName}${yy}`, `${monthName}${yy}`,
+    `${mm}${monthName}${y}`, `${monthName}${y}`,
+    `${mm}${monthShort}${yy}`, `${monthShort}${yy}`,
+  ])];
+}
+
+// Score a file name as a candidate for this week's log book
+function scoreCandidate(name, variants) {
+  const n = normalizeName(name);
+  if (!n.endsWith('xlsx') && !n.endsWith('xlsm')) return -1;
+  if (n.startsWith('~')) return -1; // Excel lock files
+  let score = 0;
+  if (variants.some(v => n.includes(v))) score += 10;  // Saturday date appears in the name
+  if (n.includes('logbook') || n.includes('log')) score += 2;
+  return score;
+}
+
+// Does the parsed workbook actually contain this week?
+// (date is read from cell K2 of the day tabs — always present)
+// Requires 2+ day tabs inside the window so a neighboring week's
+// boundary Saturday can't falsely verify through the ±1 day slack.
+function workbookMatchesWeek(parsed, saturday) {
+  const sat = new Date(saturday); sat.setHours(12, 0, 0, 0);
+  const sun = new Date(sat); sun.setDate(sat.getDate() - 6);
+  // ±1 day slack for timezone drift in date parsing
+  const lo = new Date(sun); lo.setDate(lo.getDate() - 1);
+  const hi = new Date(sat); hi.setDate(hi.getDate() + 1);
+  let hits = 0;
+  for (const day of DAY_ORDER) {
+    const ds = parsed?.[day]?.date;
+    if (!ds) continue;
+    const dt = new Date(ds + 'T12:00:00');
+    if (!isNaN(dt) && dt >= lo && dt <= hi) hits++;
+    if (hits >= 2) return true;
+  }
+  return false;
+}
+
+// ============================================================
+// Graph helpers (all cache-busted)
+// ============================================================
+function encodePath(p) {
+  return encodeURIComponent(p).replace(/%2F/g, '/');
+}
+
+async function graphGet(url, token, extraHeaders = {}) {
+  return fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Cache-Control': 'no-cache, no-store',
+      Pragma: 'no-cache',
+      ...extraHeaders,
+    },
+  });
+}
+
+async function getMetaByPath(driveId, path, token, cb) {
+  const url = `${GRAPH_BASE}/drives/${driveId}/root:/${encodePath(path)}?select=id,name,lastModifiedDateTime,eTag&${cb}`;
+  const res = await graphGet(url, token);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Failed to get file info: ${res.status}`);
+  return res.json();
+}
+
+async function listChildren(driveId, path, token, cb) {
+  const url = `${GRAPH_BASE}/drives/${driveId}/root:/${encodePath(path)}:/children?$select=id,name,lastModifiedDateTime,eTag,folder,file&$top=500&${cb}`;
+  const res = await graphGet(url, token);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Failed to list folder "${path}": ${res.status}`);
+  const data = await res.json();
+  return data.value || [];
+}
+
+async function downloadById(driveId, itemId, token, cb) {
+  const url = `${GRAPH_BASE}/drives/${driveId}/items/${itemId}/content?${cb}`;
+  const res = await graphGet(url, token, { 'If-None-Match': '' });
+  if (!res.ok) throw new Error(`Failed to fetch file: ${res.status}`);
+  return res.arrayBuffer();
+}
+
+// ============================================================
+// Locate this week's folder, tolerating naming variations
+// ============================================================
+async function resolveWeekFolder(driveId, fileInfo, token, cb) {
+  // 1. Exact folder name first
+  const exact = await listChildren(driveId, fileInfo.folderPath, token, cb);
+  if (exact) return { path: fileInfo.folderPath, children: exact };
+
+  // 2. Fall back: list "Schedule" and fuzzy-match the month folder
+  const scheduleChildren = await listChildren(driveId, 'Schedule', token, cb);
+  if (!scheduleChildren) {
+    throw new Error(`"Schedule" folder not found in drive "${DRIVE_NAME}".`);
+  }
+  const fVariants = folderVariants(fileInfo.saturdayDate);
+  const folder = scheduleChildren.find(c => c.folder && fVariants.some(v => normalizeName(c.name).includes(v)));
+  if (!folder) {
+    const available = scheduleChildren.filter(c => c.folder).map(c => c.name).join(', ') || '(none)';
+    throw new Error(`Month folder for ${fileInfo.folderPath.split('/')[1]} not found. Folders in Schedule: ${available}`);
+  }
+  const path = `Schedule/${folder.name}`;
+  const children = await listChildren(driveId, path, token, cb);
+  return { path, children: children || [] };
+}
+
+// ============================================================
 // Fetch the Excel file from SharePoint via Microsoft Graph
 // ============================================================
 export async function fetchScheduleFromSharePoint(date = new Date()) {
@@ -57,17 +195,14 @@ export async function fetchScheduleFromSharePoint(date = new Date()) {
   if (!token) throw new Error('Not authenticated');
 
   const fileInfo = getWeekFileInfo(date);
-  const encodedPath = encodeURIComponent(fileInfo.fullPath).replace(/%2F/g, '/');
 
   // Cache-bust parameter — forces Graph to skip CDN/edge cache
   const cb = `_cb=${Date.now()}`;
 
   // Step 1: Resolve the SharePoint site ID (cached after first call)
   if (!_cachedSiteId) {
-    const siteUrl = `${GRAPH_BASE}/sites/hubofficeinc.sharepoint.com:/sites/SchedulingTeam?${cb}`;
-    const siteResponse = await fetch(siteUrl, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const siteUrl = `${GRAPH_BASE}/sites/${SHAREPOINT_SITE_URL}?${cb}`;
+    const siteResponse = await graphGet(siteUrl, token);
     if (!siteResponse.ok) throw new Error(`Failed to resolve site: ${siteResponse.status}`);
     const siteData = await siteResponse.json();
     _cachedSiteId = siteData.id;
@@ -75,49 +210,77 @@ export async function fetchScheduleFromSharePoint(date = new Date()) {
 
   // Step 2: Find the document library drive (cached after first call)
   if (!_cachedDriveId) {
-    const drivesResponse = await fetch(`${GRAPH_BASE}/sites/${_cachedSiteId}/drives?${cb}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const drivesResponse = await graphGet(`${GRAPH_BASE}/sites/${_cachedSiteId}/drives?${cb}`, token);
     if (!drivesResponse.ok) throw new Error(`Failed to list drives: ${drivesResponse.status}`);
     const drivesData = await drivesResponse.json();
-
     const drive = drivesData.value.find(d => d.name === DRIVE_NAME);
     if (!drive) throw new Error(`Drive "${DRIVE_NAME}" not found. Available: ${drivesData.value.map(d => d.name).join(', ')}`);
     _cachedDriveId = drive.id;
   }
 
-  // Step 3: Get file metadata first (respects real-time changes better than /content)
-  const metaUrl = `${GRAPH_BASE}/drives/${_cachedDriveId}/root:/${encodedPath}?select=id,name,lastModifiedDateTime,eTag&${cb}`;
-  const metaResponse = await fetch(metaUrl, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Cache-Control': 'no-cache, no-store',
-      Pragma: 'no-cache',
-    },
-  });
-  if (!metaResponse.ok) {
-    if (metaResponse.status === 404) {
-      throw new Error(`File not found: ${fileInfo.fullPath}\nExpected at: ${DRIVE_NAME}/${fileInfo.fullPath}`);
+  // Step 3: Try the exact expected path first (fast path)
+  let meta = await getMetaByPath(_cachedDriveId, fileInfo.fullPath, token, cb);
+  let matchedBy = 'exact name';
+
+  // Step 4: Flexible search — list the month folder and match by date in the
+  // file name, then VERIFY by reading the date inside the workbook (cell K2).
+  if (!meta) {
+    const { path: folderPath, children } = await resolveWeekFolder(_cachedDriveId, fileInfo, token, cb);
+    const variants = dateVariants(fileInfo.saturdayDate);
+
+    const candidates = (children || [])
+      .filter(c => c.file)
+      .map(c => ({ ...c, _score: scoreCandidate(c.name, variants) }))
+      .filter(c => c._score > 0)
+      .sort((a, b) => b._score - a._score ||
+        new Date(b.lastModifiedDateTime) - new Date(a.lastModifiedDateTime));
+
+    if (candidates.length === 0) {
+      const files = (children || []).filter(c => c.file).map(c => c.name).join(', ') || '(empty folder)';
+      throw new Error(`No log book found for week ending ${fileInfo.saturdayDate.toLocaleDateString()} in ${folderPath}. Files there: ${files}`);
     }
-    throw new Error(`Failed to get file info: ${metaResponse.status}`);
-  }
-  const meta = await metaResponse.json();
 
-  // Step 4: Download file content using item ID (bypasses path-based caching)
-  const fileUrl = `${GRAPH_BASE}/drives/${_cachedDriveId}/items/${meta.id}/content?${cb}`;
-  const fileResponse = await fetch(fileUrl, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Cache-Control': 'no-cache, no-store',
-      Pragma: 'no-cache',
-      'If-None-Match': '', // Force fresh download, ignore ETags
-    },
-  });
-  if (!fileResponse.ok) {
-    throw new Error(`Failed to fetch file: ${fileResponse.status}`);
+    // Download up to 5 candidates; accept the first whose tab dates match the week
+    let firstStrong = null;
+    for (const cand of candidates.slice(0, 5)) {
+      try {
+        const buf = await downloadById(_cachedDriveId, cand.id, token, cb);
+        const parsed = parseExcelFile(buf);
+        if (workbookMatchesWeek(parsed, fileInfo.saturdayDate)) {
+          parsed._meta = {
+            lastModified: cand.lastModifiedDateTime,
+            fileName: cand.name,
+            eTag: cand.eTag,
+            matchedBy: cand._score >= 10 ? 'date in file name + verified by tab dates' : 'verified by tab dates',
+          };
+          return parsed;
+        }
+        // Remember the best name-match in case nothing verifies
+        if (!firstStrong && cand._score >= 10) firstStrong = { cand, parsed };
+      } catch (e) {
+        console.warn(`Candidate "${cand.name}" failed:`, e);
+      }
+    }
+
+    if (firstStrong) {
+      // Name clearly contains the Saturday date; trust it even though
+      // the tab dates didn't line up (they may not have been updated).
+      const { cand, parsed } = firstStrong;
+      parsed._meta = {
+        lastModified: cand.lastModifiedDateTime,
+        fileName: cand.name,
+        eTag: cand.eTag,
+        matchedBy: 'date in file name (tab dates differ — check K2 dates in the file)',
+      };
+      return parsed;
+    }
+
+    const tried = candidates.slice(0, 5).map(c => c.name).join(', ');
+    throw new Error(`Found possible files (${tried}) but none contain dates for the week ending ${fileInfo.saturdayDate.toLocaleDateString()}.`);
   }
 
-  const arrayBuffer = await fileResponse.arrayBuffer();
+  // Exact path hit — download by item ID (bypasses path-based caching)
+  const arrayBuffer = await downloadById(_cachedDriveId, meta.id, token, cb);
   const parsed = parseExcelFile(arrayBuffer);
 
   // Attach metadata so UI can show last-modified time
@@ -125,6 +288,7 @@ export async function fetchScheduleFromSharePoint(date = new Date()) {
     lastModified: meta.lastModifiedDateTime,
     fileName: meta.name,
     eTag: meta.eTag,
+    matchedBy,
   };
 
   return parsed;
