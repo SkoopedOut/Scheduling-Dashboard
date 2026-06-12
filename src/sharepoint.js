@@ -1,5 +1,6 @@
 import { getToken } from './auth.js';
 import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 
 // ============================================================
 // UPDATE THIS — your SharePoint site URL
@@ -245,7 +246,7 @@ export async function fetchScheduleFromSharePoint(date = new Date()) {
     for (const cand of candidates.slice(0, 5)) {
       try {
         const buf = await downloadById(_cachedDriveId, cand.id, token, cb);
-        const parsed = parseExcelFile(buf);
+        const parsed = await parseExcelFile(buf);
         if (workbookMatchesWeek(parsed, fileInfo.saturdayDate)) {
           parsed._meta = {
             lastModified: cand.lastModifiedDateTime,
@@ -281,7 +282,7 @@ export async function fetchScheduleFromSharePoint(date = new Date()) {
 
   // Exact path hit — download by item ID (bypasses path-based caching)
   const arrayBuffer = await downloadById(_cachedDriveId, meta.id, token, cb);
-  const parsed = parseExcelFile(arrayBuffer);
+  const parsed = await parseExcelFile(arrayBuffer);
 
   // Attach metadata so UI can show last-modified time
   parsed._meta = {
@@ -297,8 +298,21 @@ export async function fetchScheduleFromSharePoint(date = new Date()) {
 // ============================================================
 // Parse the Excel workbook into our app's data format
 // ============================================================
-export function parseExcelFile(arrayBuffer) {
+export async function parseExcelFile(arrayBuffer) {
   const workbook = XLSX.read(arrayBuffer, { type: 'array', cellDates: true });
+
+  // Second pass with ExcelJS purely to read font styles (bold = foreman /
+  // section header on the roster side). If this fails for any reason we fall
+  // back to the known fixed layout.
+  let styleBook = null;
+  try {
+    styleBook = new ExcelJS.Workbook();
+    await styleBook.xlsx.load(arrayBuffer);
+  } catch (e) {
+    console.warn('Could not read cell styles; using fixed roster layout.', e);
+    styleBook = null;
+  }
+
   const data = {};
 
   for (const dayName of DAY_ORDER) {
@@ -308,7 +322,9 @@ export function parseExcelFile(arrayBuffer) {
     }
 
     const sheet = workbook.Sheets[dayName];
-    data[dayName] = parseDaySheet(sheet, dayName);
+    let styleSheet = null;
+    try { styleSheet = styleBook ? styleBook.getWorksheet(dayName) : null; } catch { styleSheet = null; }
+    data[dayName] = parseDaySheet(sheet, dayName, styleSheet);
   }
 
   return data;
@@ -321,7 +337,7 @@ function cellVal(sheet, ref) {
   return cell.v;
 }
 
-function parseDaySheet(sheet, dayName) {
+function parseDaySheet(sheet, dayName, styleSheet) {
   // Get date from K2
   const dateVal = cellVal(sheet, 'K2');
   let dateStr = null;
@@ -375,47 +391,166 @@ function parseDaySheet(sheet, dayName) {
     });
   }
 
-  // Parse roster from columns Q-X
-  const crews = parseRosterCrews(sheet);
-  const pools = parseRosterPools(sheet);
+  // Parse roster from the right-hand side of the sheet.
+  // Bold names = foremen / section headers; positions may move, so we scan
+  // the region instead of hardcoding rows. Falls back to the fixed layout
+  // if styles are unavailable.
+  let crews, pools;
+  const grid = styleSheet ? buildRosterGrid(styleSheet) : null;
+  if (grid && Object.values(grid).some(c => c.bold)) {
+    ({ crews, pools } = parseRosterFromGrid(grid));
+  } else {
+    crews = parseRosterCrewsFixed(sheet);
+    pools = parseRosterPoolsFixed(sheet);
+  }
 
   return { day: dayName, date: dateStr, jobs, crews, pools };
 }
 
-function parseRosterCrews(sheet) {
-  const crews = {};
-  const foremanCols = [
-    { nameCol: 'Q', qualCol: 'R' },
-    { nameCol: 'S', qualCol: 'T' },
-    { nameCol: 'U', qualCol: 'V' },
-    { nameCol: 'W', qualCol: 'X' },
-  ];
+// ============================================================
+// Style-aware roster parsing (preferred)
+// ============================================================
+const ROSTER_COL_MIN = 17; // Q
+const ROSTER_COL_MAX = 26; // Z
+const ROSTER_ROW_MIN = 3;
+const ROSTER_ROW_MAX = 45;
+const QUAL_RE = /^[tva](\s*\/\s*[tva])?$/i;
+const POOL_RE = /labor|driver|extra/i;
 
-  for (const fc of foremanCols) {
-    const foremanName = cellVal(sheet, `${fc.nameCol}8`);
-    if (!foremanName || !String(foremanName).trim()) continue;
+function exVal(v) {
+  if (v == null) return null;
+  if (typeof v === 'object') {
+    if (Array.isArray(v.richText)) return v.richText.map(r => r.text).join('');
+    if (v.result !== undefined) return v.result;
+    if (v.text !== undefined) return v.text;
+    return null;
+  }
+  return v;
+}
 
-    const fName = String(foremanName).trim();
-    const members = [];
-
-    for (let r = 9; r <= 19; r++) {
-      const name = cellVal(sheet, `${fc.nameCol}${r}`);
-      const qual = cellVal(sheet, `${fc.qualCol}${r}`);
-      if (name && typeof name === 'string' && name.trim()) {
-        members.push({
-          name: name.trim(),
-          qual: qual ? String(qual).trim() : null,
-        });
+// grid["col,row"] = { text, bold } for the roster region
+function buildRosterGrid(styleSheet) {
+  const grid = {};
+  try {
+    for (let r = ROSTER_ROW_MIN; r <= ROSTER_ROW_MAX; r++) {
+      const row = styleSheet.getRow(r);
+      for (let c = ROSTER_COL_MIN; c <= ROSTER_COL_MAX; c++) {
+        const cell = row.getCell(c);
+        // Merged cells mirror the master's value into every constituent cell;
+        // only keep the master so merged headers don't appear multiple times.
+        if (cell.isMerged && cell.master && cell.master.address !== cell.address) continue;
+        const raw = exVal(cell.value);
+        const text = raw == null ? '' : String(raw).trim();
+        if (!text) continue;
+        const bold = !!cell.font?.bold ||
+          (Array.isArray(cell.value?.richText) && cell.value.richText.some(rt => rt.font?.bold));
+        grid[`${c},${r}`] = { text, bold };
       }
     }
+  } catch (e) {
+    console.warn('Roster grid scan failed:', e);
+    return null;
+  }
+  return grid;
+}
 
-    crews[fName] = { members };
+function gridCell(grid, c, r) { return grid[`${c},${r}`] || null; }
+
+function parseRosterFromGrid(grid) {
+  const crews = {};
+  const headers = []; // {col,row,text,kind}
+
+  for (const key of Object.keys(grid)) {
+    const cell = grid[key];
+    if (!cell.bold) continue;
+    if (QUAL_RE.test(cell.text)) continue;          // bold qual letter — not a header
+    if (cell.text.length < 2) continue;
+    const [c, r] = key.split(',').map(Number);
+    headers.push({ col: c, row: r, text: cell.text, kind: POOL_RE.test(cell.text) ? 'pool' : 'foreman' });
+  }
+  headers.sort((a, b) => a.row - b.row || a.col - b.col);
+
+  const firstPoolRow = Math.min(...headers.filter(h => h.kind === 'pool').map(h => h.row), Infinity);
+  const boldAt = (c, r) => !!gridCell(grid, c, r)?.bold;
+
+  // Foreman crews: members directly below the bold name in the same column,
+  // until a blank cell, another bold cell, or the pool section.
+  for (const h of headers) {
+    if (h.kind !== 'foreman') continue;
+    if (h.row >= firstPoolRow) continue; // bold names inside pool area aren't foremen
+    const qualHere = gridCell(grid, h.col + 1, h.row);
+    const members = [];
+    for (let r = h.row + 1; r <= ROSTER_ROW_MAX; r++) {
+      const cell = gridCell(grid, h.col, r);
+      if (!cell || cell.bold || r >= firstPoolRow) break;
+      if (QUAL_RE.test(cell.text)) continue;
+      const q = gridCell(grid, h.col + 1, r);
+      members.push({ name: cell.text, qual: q && QUAL_RE.test(q.text) ? q.text.toUpperCase() : null });
+    }
+    crews[h.text] = {
+      members,
+      qual: qualHere && QUAL_RE.test(qualHere.text) ? qualHere.text.toUpperCase() : null,
+    };
   }
 
+  // Pools: names below each bold pool header. Laborers/Drivers use their own
+  // column; Extra spreads across its column and everything to its right.
+  const pools = { laborers: [], drivers: [], extra: [] };
+  for (const h of headers) {
+    if (h.kind !== 'pool') continue;
+    const target = /labor/i.test(h.text) ? pools.laborers : /driver/i.test(h.text) ? pools.drivers : pools.extra;
+    const isExtra = target === pools.extra;
+    const colEnd = isExtra ? ROSTER_COL_MAX : h.col;
+    let emptyRows = 0;
+    for (let r = h.row + 1; r <= ROSTER_ROW_MAX && emptyRows < 2; r++) {
+      let any = false;
+      for (let c = h.col; c <= colEnd; c++) {
+        const cell = gridCell(grid, c, r);
+        if (!cell || cell.bold) continue;
+        if (QUAL_RE.test(cell.text)) continue;
+        target.push({ name: cell.text });
+        any = true;
+      }
+      emptyRows = any ? 0 : emptyRows + 1;
+    }
+  }
+
+  return { crews, pools };
+}
+
+// ============================================================
+// Fixed-layout fallback (used only if cell styles can't be read)
+// Two foreman bands: row 8 and row 14, name cols Q/S/U/W.
+// ============================================================
+function parseRosterCrewsFixed(sheet) {
+  const crews = {};
+  const nameCols = ['Q', 'S', 'U', 'W'];
+  const qualCol = { Q: 'R', S: 'T', U: 'V', W: 'X' };
+  const bands = [
+    { headerRow: 8, lastRow: 12 },
+    { headerRow: 14, lastRow: 19 },
+  ];
+
+  for (const band of bands) {
+    for (const col of nameCols) {
+      const foremanName = cellVal(sheet, `${col}${band.headerRow}`);
+      if (!foremanName || !String(foremanName).trim()) continue;
+      const fName = String(foremanName).trim();
+      const members = [];
+      for (let r = band.headerRow + 1; r <= band.lastRow; r++) {
+        const name = cellVal(sheet, `${col}${r}`);
+        const qual = cellVal(sheet, `${qualCol[col]}${r}`);
+        if (name && typeof name === 'string' && name.trim()) {
+          members.push({ name: name.trim(), qual: qual ? String(qual).trim() : null });
+        }
+      }
+      crews[fName] = { members };
+    }
+  }
   return crews;
 }
 
-function parseRosterPools(sheet) {
+function parseRosterPoolsFixed(sheet) {
   const laborers = [];
   const drivers = [];
   const extra = [];

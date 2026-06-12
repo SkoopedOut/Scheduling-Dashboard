@@ -9,6 +9,9 @@ const FOREMAN_COLORS = {
   Eddie:"#a78bfa", Craig:"#06b6d4", Ayotte:"#ef4444", Brian:"#84cc16",
 };
 const PM_COLORS = {D:"#4a9eff",R:"#f59e0b",G:"#10b981",J:"#a78bfa",JE:"#f472b6"};
+// Fallback palette so foremen who are renamed/added still get a stable color
+const FOREMAN_PALETTE = ["#4a9eff","#f59e0b","#10b981","#f472b6","#a78bfa","#06b6d4","#ef4444","#84cc16","#fb923c","#22d3ee","#e879f9","#facc15"];
+function foremanColor(name, idx){ return FOREMAN_COLORS[name] || FOREMAN_PALETTE[(idx>=0?idx:0)%FOREMAN_PALETTE.length]; }
 const REFRESH_MS = 2 * 60 * 1000; // 2 minutes — cache-busting makes this safe now
 
 function getTodayDayName(){ return DAY_ORDER[new Date().getDay()]; }
@@ -125,8 +128,16 @@ function getConflictsForDay(dayData){
 
 // ── Jobs Table ───────────────────────────────────────────────
 function JobsTable({dayData,flashedJobs}){
+  const [hlPerson,setHlPerson]=useState(null);
+  useEffect(()=>{setHlPerson(null);},[dayData?.day]);
   if(!dayData?.jobs?.length) return <div style={{padding:"50px",textAlign:"center",color:"#444",fontStyle:"italic"}}>No jobs scheduled.</div>;
   const jobs=dayData.jobs;
+  // Foremen come from today's parsed roster (bold names in the sheet), so renames just work
+  const foremanKeys=Object.keys(dayData.crews||{});
+  const foremanIdx=new Map(foremanKeys.map((f,i)=>[f,i]));
+  const isForeman=n=>foremanIdx.has(n)||FOREMAN_ORDER.includes(n);
+  const colorOf=n=>foremanColor(n,foremanIdx.has(n)?foremanIdx.get(n):FOREMAN_ORDER.indexOf(n));
+  const togglePerson=n=>setHlPerson(p=>p===n?null:n);
   const multiJobs=getConflictsForDay(dayData); // people on more than one job today (informational, not a conflict)
   const multiCounts=new Map(multiJobs.map(c=>[c.name,c.jobs.length]));
   // Group overtime jobs together at the bottom, keeping sheet order within each group
@@ -154,12 +165,13 @@ function JobsTable({dayData,flashedJobs}){
               <span style={{fontWeight:800,color:"#38bdf8",marginRight:"8px",letterSpacing:"0.5px"}}>⇄ ON MULTIPLE JOBS</span>
               {multiJobs.map((c,i)=>(
                 <span key={i}>
-                  <span style={{color:"#7dd3fc",fontWeight:700}}>{c.name}</span>
+                  <button onClick={()=>togglePerson(c.name)} style={{background:hlPerson===c.name?"rgba(56,189,248,0.2)":"transparent",border:"none",borderRadius:"3px",padding:"0 4px",color:"#7dd3fc",fontWeight:700,cursor:"pointer",fontFamily:"inherit",fontSize:"11px",textDecoration:hlPerson===c.name?"none":"underline",textDecorationStyle:"dotted",textUnderlineOffset:"3px"}}>{c.name}</button>
                   <span style={{color:"#4a5568"}}> on </span>
                   {c.jobs.map((j,ji)=><span key={ji}><span style={{color:"#e2e8f0"}}>{j.customer}</span>{ji<c.jobs.length-1&&<span style={{color:"#4a5568"}}> & </span>}</span>)}
                   {i<multiJobs.length-1&&<span style={{margin:"0 10px",color:"#2d3748"}}>·</span>}
                 </span>
               ))}
+              {hlPerson&&<button onClick={()=>setHlPerson(null)} style={{marginLeft:"12px",background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:"3px",padding:"1px 8px",color:"#9ca3af",cursor:"pointer",fontFamily:"inherit",fontSize:"10px",fontWeight:700}}>✕ CLEAR</button>}
             </div>
           )}
           {unassigned.length>0&&(
@@ -205,8 +217,10 @@ function JobsTable({dayData,flashedJobs}){
             const pmColor=PM_COLORS[(job.calledIn||'').toUpperCase()];
             const isOT=isOvertimeStart(job.onsiteTime);
             const firstOT=isOT&&otJobs.length>0&&job===otJobs[0]&&regularJobs.length>0;
-            const rowBg=isOT?"rgba(250,204,21,0.09)":noCrewFlag?"rgba(245,158,11,0.05)":i%2?"rgba(255,255,255,0.012)":"transparent";
-            const hoverBg=isOT?"rgba(250,204,21,0.16)":"rgba(74,158,255,0.04)";
+            const onHlJob=hlPerson?(job.crew||[]).includes(hlPerson):false;
+            const rowBg=onHlJob?"rgba(56,189,248,0.10)":isOT?"rgba(250,204,21,0.09)":noCrewFlag?"rgba(245,158,11,0.05)":i%2?"rgba(255,255,255,0.012)":"transparent";
+            const hoverBg=onHlJob?"rgba(56,189,248,0.16)":isOT?"rgba(250,204,21,0.16)":"rgba(74,158,255,0.04)";
+            const rowOpacity=hlPerson&&!onHlJob?0.3:1;
             return(
               <Fragment key={`${job.num}-${i}`}>
               {firstOT&&(
@@ -214,7 +228,7 @@ function JobsTable({dayData,flashedJobs}){
                   ⏱ OVERTIME — starts before 6:00 AM or 2:00 PM &amp; later
                 </td></tr>
               )}
-              <tr className={isFlashed?"job-flash":""} style={{borderBottom:"1px solid rgba(255,255,255,0.03)",background:rowBg,transition:"background 0.12s"}}
+              <tr className={isFlashed?"job-flash":""} style={{borderBottom:"1px solid rgba(255,255,255,0.03)",background:rowBg,transition:"background 0.12s, opacity 0.15s",opacity:rowOpacity,boxShadow:onHlJob?"inset 0 0 0 1px rgba(56,189,248,0.35)":"none"}}
                 onMouseEnter={e=>e.currentTarget.style.background=hoverBg}
                 onMouseLeave={e=>e.currentTarget.style.background=rowBg}>
                 <td style={{padding:"10px 8px",fontWeight:800,color:isOT?"#facc15":"#4a9eff",fontFamily:"'JetBrains Mono',monospace",borderLeft:`3px solid ${isOT?"#facc15":pmColor||"transparent"}`}}>{job.num}</td>
@@ -235,18 +249,21 @@ function JobsTable({dayData,flashedJobs}){
                     ?<span style={{color:"#4a5568",fontStyle:"italic",fontSize:"11px"}}>— none assigned —</span>
                     :<div style={{display:"flex",flexWrap:"wrap",gap:"3px",alignItems:"center"}}>
                       {(job.crew||[]).map((n,j)=>{
-                        const isF=FOREMAN_ORDER.includes(n); const fc=FOREMAN_COLORS[n];
+                        const isF=isForeman(n); const fc=isF?colorOf(n):null;
                         const multiCount=multiCounts.get(n);
+                        const isHl=hlPerson===n;
                         const isStop=isStopLabel(n);
                         const isDrv=isDriverTag(n);
                         if(isStop) return <span key={j} style={{fontSize:"9px",fontWeight:700,letterSpacing:"0.5px",color:"#2d3748",padding:"1px 5px",borderRadius:"3px",background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)"}}>{n.toUpperCase()}</span>;
                         if(isDrv) return <span key={j} style={{display:"inline-block",padding:"2px 7px",borderRadius:"4px",fontSize:"11px",background:"rgba(139,92,246,0.08)",color:"#8b5cf6",fontWeight:500,border:"1px solid rgba(139,92,246,0.2)"}} title="Driver">{n}</span>;
-                        return <span key={j} style={{display:"inline-block",padding:"2px 7px",borderRadius:"4px",fontSize:"11px",
-                          background:isF?`${fc}18`:"rgba(255,255,255,0.05)",
+                        const chip=<span style={{display:"inline-block",padding:"2px 7px",borderRadius:"4px",fontSize:"11px",
+                          background:isHl?"rgba(56,189,248,0.2)":isF?`${fc}18`:"rgba(255,255,255,0.05)",
                           color:isF?fc:"#9ca3af",
                           fontWeight:isF?700:400,
-                          border:multiCount?"1px solid rgba(56,189,248,0.45)":isF?`1px solid ${fc}35`:"1px solid transparent"
-                        }} title={multiCount?`On ${multiCount} jobs today`:undefined}>{n}{multiCount&&<span style={{marginLeft:"4px",fontSize:"9px",fontWeight:800,color:"#38bdf8"}}>×{multiCount}</span>}</span>;
+                          border:isHl?"1px solid rgba(56,189,248,0.7)":multiCount?"1px solid rgba(56,189,248,0.45)":isF?`1px solid ${fc}35`:"1px solid transparent"
+                        }}>{n}{multiCount&&<span style={{marginLeft:"4px",fontSize:"9px",fontWeight:800,color:"#38bdf8"}}>×{multiCount}</span>}</span>;
+                        if(multiCount) return <button key={j} onClick={()=>togglePerson(n)} title={isHl?"Click to clear highlight":`On ${multiCount} jobs today — click to highlight them`} style={{background:"transparent",border:"none",padding:0,cursor:"pointer",fontFamily:"inherit"}}>{chip}</button>;
+                        return <Fragment key={j}>{chip}</Fragment>;
                       })}
                     </div>
                   }
@@ -275,10 +292,9 @@ function JobsTable({dayData,flashedJobs}){
 
 // ── Helpers ──────────────────────────────────────────────────
 function getForemanList(crews){
-  if(!crews) return FOREMAN_ORDER;
-  const known=FOREMAN_ORDER.filter(f=>crews[f]);
-  const novel=Object.keys(crews).filter(f=>!FOREMAN_ORDER.includes(f));
-  return [...known,...novel];
+  if(!crews||Object.keys(crews).length===0) return FOREMAN_ORDER;
+  // Preserve sheet order (parser inserts in reading order: top band then bottom, left to right)
+  return Object.keys(crews);
 }
 
 function getPersonDays(name,allData){
@@ -378,8 +394,8 @@ function CrewRoster({crews,pools,allData}){
     <div>
       <div style={{fontSize:"10px",fontWeight:800,letterSpacing:"1.5px",color:"#4a5568",marginBottom:"12px"}}>FOREMAN CREWS</div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"10px",marginBottom:"28px"}}>
-        {foremanList.map(f=>{
-          const crew=crews[f]; const color=FOREMAN_COLORS[f]||"#7a8599";
+        {foremanList.map((f,fi)=>{
+          const crew=crews[f]; const color=foremanColor(f,fi);
           const allMembers=[f,...(crew?.members||[]).map(m=>m.name)];
           const working=allMembers.filter(n=>DAY_ORDER.some(day=>(allData?.[day]?.jobs||[]).some(j=>(j.crew||[]).includes(n)))).length;
           const total=allMembers.length;
@@ -403,7 +419,7 @@ function CrewRoster({crews,pools,allData}){
                   fontSize:"12px",color:selectedPerson===f?color:color,
                   cursor:"pointer",transition:"all 0.12s",fontWeight:600,
                 }}>
-                  <span>{f}</span>
+                  <span>{f}<QualBadge code={crew?.qual}/></span>
                   <DayTracker name={f} allData={allData}/>
                 </button>
                 {(crew?.members||[]).map((m,i)=>
