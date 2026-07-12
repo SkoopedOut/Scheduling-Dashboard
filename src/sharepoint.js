@@ -347,28 +347,42 @@ function parseDaySheet(sheet, dayName, styleSheet) {
     dateStr = dateVal;
   }
 
-  // Parse jobs from rows 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30 (job rows at A column with numbers 1-13)
+  // Parse jobs by scanning for numbered rows instead of a hardcoded row list.
+  // The sheet currently has 15 job slots (rows 6-34), but rows can shift or
+  // grow — any row whose column A holds a job number is treated as a job,
+  // and everything until the next numbered row belongs to it (crew overflow).
+  // Scanning stops at the "SCHEDULER NOTES" section.
   const jobs = [];
-  const jobRows = [6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30];
+  const numberedRows = [];
+  for (let r = 4; r <= 100; r++) {
+    const a = cellVal(sheet, `A${r}`);
+    if (a == null) continue;
+    if (typeof a === 'string' && /scheduler\s*notes/i.test(a)) break;
+    const num = typeof a === 'number' ? a
+      : (typeof a === 'string' && /^\d{1,3}$/.test(a.trim()) ? parseInt(a.trim(), 10) : null);
+    if (num != null) numberedRows.push({ row: r, num });
+  }
 
-  for (const row of jobRows) {
-    const jobNum = cellVal(sheet, `A${row}`);
-    if (jobNum == null || typeof jobNum !== 'number') continue;
-
+  for (let i = 0; i < numberedRows.length; i++) {
+    const { row, num } = numberedRows[i];
     const customer = cellVal(sheet, `B${row}`);
-    if (!customer) continue; // Skip empty job slots
+    if (!customer || !String(customer).trim()) continue; // Empty job slot
 
     const poJob = cellVal(sheet, `C${row}`);
     const location = cellVal(sheet, `D${row}`);
     const onsiteTime = cellVal(sheet, `E${row}`);
     const trucks = cellVal(sheet, `F${row}`);
-    const numMen = cellVal(sheet, `G${row}`);
+    const numMenRaw = cellVal(sheet, `G${row}`);
     const calledIn = cellVal(sheet, `M${row}`);
     const jobFolder = cellVal(sheet, `N${row}`);
 
-    // Collect crew names from columns H through L (main row) and H through L (row+1 for overflow)
+    const numMen = typeof numMenRaw === 'number' ? numMenRaw
+      : (typeof numMenRaw === 'string' && /^\d+$/.test(numMenRaw.trim()) ? parseInt(numMenRaw.trim(), 10) : null);
+
+    // Crew: columns H-L on the job row plus every row until the next job number
+    const crewEnd = i + 1 < numberedRows.length ? numberedRows[i + 1].row - 1 : row + 1;
     const crew = [];
-    for (const r of [row, row + 1]) {
+    for (let r = row; r <= crewEnd; r++) {
       for (const col of ['H', 'I', 'J', 'K', 'L']) {
         const name = cellVal(sheet, `${col}${r}`);
         if (name && typeof name === 'string' && name.trim()) {
@@ -378,13 +392,13 @@ function parseDaySheet(sheet, dayName, styleSheet) {
     }
 
     jobs.push({
-      num: jobNum,
+      num,
       customer: typeof customer === 'string' ? customer.trim() : String(customer),
       poJob: poJob != null ? String(poJob).trim() : null,
       location: typeof location === 'string' ? location.trim().replace(/\n/g, ', ') : null,
       onsiteTime: onsiteTime != null ? String(onsiteTime).trim() : null,
       trucks: trucks != null ? String(trucks).trim() : null,
-      numMen: typeof numMen === 'number' ? numMen : null,
+      numMen,
       crew,
       calledIn: calledIn != null ? String(calledIn).trim() : null,
       jobFolder: jobFolder != null ? String(jobFolder).trim().toLowerCase() : null,

@@ -142,6 +142,7 @@ function getConflictsForDay(dayData){
 function JobsTable({dayData,flashedJobs}){
   const isMobile=useIsMobile();
   const [hlPerson,setHlPerson]=useState(null);
+  const [query,setQuery]=useState("");
   useEffect(()=>{setHlPerson(null);},[dayData?.day]);
   if(!dayData?.jobs?.length) return <div style={{padding:"50px",textAlign:"center",color:"#444",fontStyle:"italic"}}>No jobs scheduled.</div>;
   const jobs=dayData.jobs;
@@ -153,9 +154,14 @@ function JobsTable({dayData,flashedJobs}){
   const togglePerson=n=>setHlPerson(p=>p===n?null:n);
   const multiJobs=getConflictsForDay(dayData); // people on more than one job today (informational, not a conflict)
   const multiCounts=new Map(multiJobs.map(c=>[c.name,c.jobs.length]));
+  // Search filter: matches customer, location, PO, PM, or any crew name
+  const q=query.trim().toLowerCase();
+  const matchesQuery=j=>!q||[j.customer,j.location,j.poJob,j.calledIn,...(j.crew||[])]
+    .some(v=>v&&String(v).toLowerCase().includes(q));
+  const visibleJobs=jobs.filter(matchesQuery);
   // Group overtime jobs together at the bottom, keeping sheet order within each group
-  const regularJobs=jobs.filter(j=>!isOvertimeStart(j.onsiteTime));
-  const otJobs=jobs.filter(j=>isOvertimeStart(j.onsiteTime));
+  const regularJobs=visibleJobs.filter(j=>!isOvertimeStart(j.onsiteTime));
+  const otJobs=visibleJobs.filter(j=>isOvertimeStart(j.onsiteTime));
   const orderedJobs=[...regularJobs,...otJobs];
   const unassigned=jobs.filter(j=>!j.crew?.length);
   // Headcount: only count real people (exclude stop labels and driver tags)
@@ -171,6 +177,21 @@ function JobsTable({dayData,flashedJobs}){
   const totalTrucks=jobs.filter(j=>j.trucks&&!/^(na|n\/a)$/i.test(j.trucks.trim())).length;
   return(
     <div>
+      {/* Search / filter */}
+      <div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"12px"}}>
+        <div style={{flex:1,maxWidth:isMobile?"none":"340px",position:"relative"}}>
+          <span style={{position:"absolute",left:"11px",top:"50%",transform:"translateY(-50%)",fontSize:"13px",opacity:0.5,pointerEvents:"none"}}>🔍</span>
+          <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Find a name, customer, location…"
+            style={{width:"100%",boxSizing:"border-box",padding:isMobile?"11px 34px 11px 34px":"8px 32px 8px 34px",borderRadius:"8px",
+              background:"rgba(255,255,255,0.04)",border:q?"1px solid rgba(74,158,255,0.4)":"1px solid rgba(255,255,255,0.08)",
+              color:"#e2e8f0",fontSize:isMobile?"16px":"12px",fontFamily:"inherit",outline:"none"}}/>
+          {q&&<button onClick={()=>setQuery("")} style={{position:"absolute",right:"6px",top:"50%",transform:"translateY(-50%)",background:"rgba(255,255,255,0.08)",border:"none",borderRadius:"50%",width:"20px",height:"20px",color:"#9ca3af",cursor:"pointer",fontSize:"11px",lineHeight:1}}>✕</button>}
+        </div>
+        {q&&<span style={{fontSize:"11px",color:"#7a8599",fontFamily:"'JetBrains Mono',monospace",whiteSpace:"nowrap"}}>
+          <b style={{color:"#4a9eff"}}>{visibleJobs.length}</b> of {jobs.length}
+        </span>}
+      </div>
+      {q&&visibleJobs.length===0&&<div style={{padding:"30px",textAlign:"center",color:"#4a5568",fontStyle:"italic",fontSize:"13px"}}>Nothing matches "{query}" on {dayData.day}.</div>}
       {hasIssues&&(
         <div style={{display:"flex",flexDirection:"column",gap:"5px",marginBottom:"14px"}}>
           {multiJobs.length>0&&(
@@ -641,6 +662,37 @@ function MonthCalendar({weeksCache,monthCursor,setMonthCursor,onPickDay,mode,req
   );
 }
 
+// ── Mobile bottom navigation ─────────────────────────────────
+function BottomNav({activeTab,setActiveTab,todayChangeCount,selectedDay}){
+  const items=[
+    {id:"schedule",icon:"📋",l:selectedDay.slice(0,3)},
+    {id:"week",icon:"🗓️",l:"Week"},
+    {id:"month",icon:"📆",l:"Month"},
+    {id:"roster",icon:"👷",l:"Roster"},
+    {id:"changes",icon:"🕑",l:"Changes",badge:todayChangeCount},
+  ];
+  return(
+    <div style={{position:"fixed",bottom:0,left:0,right:0,zIndex:500,display:"flex",
+      background:"rgba(10,15,22,0.97)",backdropFilter:"blur(12px)",borderTop:"1px solid rgba(255,255,255,0.08)",
+      paddingBottom:"env(safe-area-inset-bottom)"}}>
+      {items.map(t=>{
+        const active=activeTab===t.id;
+        return(
+          <button key={t.id} onClick={()=>setActiveTab(t.id)} style={{
+            flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:"2px",
+            padding:"9px 0 7px",background:"transparent",border:"none",cursor:"pointer",fontFamily:"inherit",
+            color:active?"#4a9eff":"#4a5568",position:"relative"}}>
+            <span style={{fontSize:"18px",lineHeight:1,filter:active?"none":"grayscale(1) opacity(0.6)"}}>{t.icon}</span>
+            <span style={{fontSize:"9px",fontWeight:active?800:600,letterSpacing:"0.3px"}}>{t.l}</span>
+            {t.badge>0&&<span style={{position:"absolute",top:"4px",right:"calc(50% - 18px)",minWidth:"14px",height:"14px",borderRadius:"7px",background:"#e8a948",color:"#0a0f16",fontSize:"9px",fontWeight:800,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 3px"}}>{t.badge}</span>}
+            {active&&<span style={{position:"absolute",top:0,left:"20%",right:"20%",height:"2px",borderRadius:"1px",background:"#4a9eff"}}/>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Helpers ──────────────────────────────────────────────────
 function getForemanList(crews){
   if(!crews||Object.keys(crews).length===0) return FOREMAN_ORDER;
@@ -884,6 +936,8 @@ export default function App(){
   const [isRefreshing,setIsRefreshing]=useState(false);
   const [flashedJobs,setFlashedJobs]=useState(new Set());
   const isMobile=useIsMobile();
+  const [legendOpen,setLegendOpen]=useState(false);
+  const touchRef=useRef(null);
   const [tvMode,setTvMode]=useState(()=>typeof window!=="undefined"&&window.location.hash==="#tv");
   const [changeLog,setChangeLog]=useState(loadChangeLog);
   const [monthCursor,setMonthCursor]=useState(()=>{const t=new Date();return new Date(t.getFullYear(),t.getMonth(),1);});
@@ -1056,6 +1110,22 @@ export default function App(){
   // Changes made today, shown as a badge on the Changes tab
   const todayChangeCount=changeLog.filter(e=>new Date(e.ts).toDateString()===new Date().toDateString()).length;
 
+  // Swipe left/right between days on the mobile schedule view
+  function onTouchStart(e){
+    touchRef.current={x:e.touches[0].clientX,y:e.touches[0].clientY};
+  }
+  function onTouchEnd(e){
+    if(!touchRef.current) return;
+    const dx=e.changedTouches[0].clientX-touchRef.current.x;
+    const dy=e.changedTouches[0].clientY-touchRef.current.y;
+    touchRef.current=null;
+    if(!isMobile||activeTab!=="schedule") return;
+    if(Math.abs(dx)<60||Math.abs(dy)>50) return;
+    const i=DAY_ORDER.indexOf(selectedDay);
+    if(dx<0&&i<DAY_ORDER.length-1) setSelectedDay(DAY_ORDER[i+1]);
+    else if(dx>0&&i>0) setSelectedDay(DAY_ORDER[i-1]);
+  }
+
   if(tvMode){
     // TV always shows the current real week
     const tvData=weeksCache[INITIAL_SAT]||data;
@@ -1068,7 +1138,7 @@ export default function App(){
   const totalTrucks=cur?.jobs?.filter(j=>j.trucks&&j.trucks!=="na"&&j.trucks!=="n/a").length||0;
 
   return(
-    <div style={{minHeight:"100vh",background:"#0a0f16",color:"#e2e8f0",fontFamily:"'Inter',-apple-system,sans-serif"}}>
+    <div style={{minHeight:"100vh",background:"#0a0f16",color:"#e2e8f0",fontFamily:"'Inter',-apple-system,sans-serif",paddingBottom:isMobile?"70px":0}}>
       <style>{`@keyframes jobFlash{0%,65%{background-color:rgba(16,185,129,0.18);}100%{background-color:transparent;}} .job-flash{animation:jobFlash 4s ease-out forwards;} @keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}`}</style>
       <ConnectionBar mode={mode} lastRefresh={lastRefresh} nextRefresh={nextRefresh} isConnected={mode==="live"} onConnect={handleConnect} onRefresh={refreshData} error={error} fileMeta={fileMeta} isRefreshing={isRefreshing}/>
 
@@ -1102,8 +1172,8 @@ export default function App(){
         </div>
       </div>
 
-      {/* Tabs */}
-      <div style={{padding:isMobile?"14px 12px 0":"18px 24px 0",display:"flex",gap:"2px",overflowX:"auto"}}>
+      {/* Tabs (desktop only — mobile uses the bottom navigation bar) */}
+      {!isMobile&&<div style={{padding:"18px 24px 0",display:"flex",gap:"2px",overflowX:"auto"}}>
         {[
           {id:"schedule",l:isMobile?selectedDay.slice(0,3):`${selectedDay}'s Schedule`},
           {id:"roster",l:isMobile?"Roster":"Crew Roster"},
@@ -1122,10 +1192,10 @@ export default function App(){
             {t.badge>0&&<span style={{marginLeft:"6px",fontSize:"9px",fontWeight:800,padding:"1px 6px",borderRadius:"8px",background:"rgba(232,169,72,0.18)",color:"#e8a948",fontFamily:"'JetBrains Mono',monospace"}}>{t.badge}</span>}
           </button>
         )}
-      </div>
+      </div>}
 
       {/* Content */}
-      <div style={{margin:isMobile?"0 12px 16px":"0 24px 24px",background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.05)",borderRadius:"0 8px 8px 8px",padding:isMobile?"12px":"20px",minHeight:"420px"}}>
+      <div onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} style={{margin:isMobile?"14px 12px 16px":"0 24px 24px",background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.05)",borderRadius:isMobile?"10px":"0 8px 8px 8px",padding:isMobile?"12px":"20px",minHeight:"420px"}}>
         {loadingWeek===currentWeekSat&&!weeksCache[currentWeekSat]
           ? <div style={{padding:"80px",textAlign:"center",color:"#4a5568"}}>
               <div style={{fontSize:"28px",marginBottom:"12px",animation:"spin 1s linear infinite"}}>⟳</div>
@@ -1137,16 +1207,17 @@ export default function App(){
               </div>
             : <>
                 {(activeTab==="schedule"||activeTab==="roster")&&
-                  <div style={{display:"flex",gap:"3px",marginBottom:"14px",borderBottom:"1px solid rgba(255,255,255,0.04)",paddingBottom:"10px"}}>
+                  <div style={{display:"flex",gap:isMobile?"5px":"3px",marginBottom:"14px",borderBottom:"1px solid rgba(255,255,255,0.04)",paddingBottom:"10px",overflowX:"auto",WebkitOverflowScrolling:"touch",alignItems:"center"}}>
                     {DAY_ORDER.map(d=>{const isToday=d===getTodayDayName(),isSel=d===selectedDay;
                       const djc=data[d]?.jobs?.length||0;
                       return <button key={d} onClick={()=>setSelectedDay(d)} style={{
-                        padding:"6px 14px",borderRadius:"6px",cursor:"pointer",fontSize:"11px",fontWeight:isSel?700:500,fontFamily:"inherit",
-                        background:isSel?"rgba(74,158,255,0.1)":"transparent",border:isSel?"1px solid rgba(74,158,255,0.25)":"1px solid transparent",
+                        padding:isMobile?"10px 13px":"6px 14px",borderRadius:isMobile?"9px":"6px",cursor:"pointer",fontSize:isMobile?"13px":"11px",fontWeight:isSel?700:500,fontFamily:"inherit",flexShrink:0,
+                        background:isSel?"rgba(74,158,255,0.1)":isMobile?"rgba(255,255,255,0.02)":"transparent",border:isSel?"1px solid rgba(74,158,255,0.25)":isMobile?"1px solid rgba(255,255,255,0.05)":"1px solid transparent",
                         color:isSel?"#4a9eff":isToday?"#10b981":djc>0?"#7a8599":"#3a4254"}}>
                         {d.substring(0,3)}{djc>0&&<span style={{marginLeft:"5px",fontSize:"9px",fontWeight:800,fontFamily:"'JetBrains Mono',monospace",color:isSel?"#4a9eff":"#4a5568"}}>{djc}</span>}{isToday&&!isSel&&<span style={{display:"inline-block",width:"4px",height:"4px",borderRadius:"50%",background:"#10b981",marginLeft:"4px",verticalAlign:"middle"}}/>}
                       </button>;
                     })}
+                    {isMobile&&activeTab==="schedule"&&<span style={{marginLeft:"auto",paddingLeft:"8px",fontSize:"9px",color:"#3a4254",whiteSpace:"nowrap",flexShrink:0}}>← swipe →</span>}
                   </div>
                 }
                 {activeTab==="schedule"&&<JobsTable dayData={cur} flashedJobs={flashedJobs}/>}
@@ -1158,8 +1229,13 @@ export default function App(){
         }
       </div>
 
-      {/* Legend */}
-      <div style={{padding:isMobile?"0 12px 14px":"0 24px 16px",display:"flex",gap:isMobile?"12px":"20px",fontSize:"10px",color:"#4a5568",flexWrap:"wrap"}}>
+      {/* Legend (collapsed behind a toggle on mobile) */}
+      {isMobile&&(
+        <button onClick={()=>setLegendOpen(o=>!o)} style={{margin:"0 12px 10px",padding:"7px 14px",background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:"7px",color:"#6b7789",fontSize:"11px",fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+          {legendOpen?"▾":"▸"} What do the badges &amp; colors mean?
+        </button>
+      )}
+      {(!isMobile||legendOpen)&&<div style={{padding:isMobile?"0 12px 14px":"0 24px 16px",display:"flex",gap:isMobile?"12px":"20px",fontSize:"10px",color:"#4a5568",flexWrap:"wrap"}}>
         <div style={{display:"flex",alignItems:"center",gap:"6px"}}>
           <span style={{fontWeight:800,letterSpacing:"1px"}}>PM:</span>
           {["D","R","G","J","JE"].map(k=><PMBadge key={k} initials={k}/>)}
@@ -1181,7 +1257,9 @@ export default function App(){
         <div style={{display:"flex",alignItems:"center",gap:"6px"}}>
           <span style={{color:"#38bdf8",fontWeight:800}}>×2</span><span style={{color:"#6b7789"}}>= on multiple jobs that day</span>
         </div>
-      </div>
+      </div>}
+
+      {isMobile&&<BottomNav activeTab={activeTab} setActiveTab={setActiveTab} todayChangeCount={todayChangeCount} selectedDay={selectedDay}/>}
     </div>
   );
 }
