@@ -317,7 +317,7 @@ export async function parseExcelFile(arrayBuffer) {
 
   for (const dayName of DAY_ORDER) {
     if (!workbook.SheetNames.includes(dayName)) {
-      data[dayName] = { day: dayName, date: null, jobs: [], crews: {}, pools: {} };
+      data[dayName] = { day: dayName, date: null, jobs: [], crews: {}, pools: {}, unavailable: [], unassigned: [] };
       continue;
     }
 
@@ -335,6 +335,34 @@ function cellVal(sheet, ref) {
   if (!cell) return null;
   if (cell.t === 'd') return cell.v;
   return cell.v;
+}
+
+// A job row is "cancelled" when the scheduler strikes it through in Excel.
+// We check the customer cell (B) plus the rest of the job columns (C-G):
+// cancelled if the customer is struck, or if most filled cells in the row are.
+function cellStruck(cell) {
+  if (!cell) return false;
+  if (cell.font?.strike) return true;
+  return Array.isArray(cell.value?.richText) && cell.value.richText.some(rt => rt.font?.strike);
+}
+
+function jobRowCancelled(styleSheet, rowNum) {
+  if (!styleSheet) return false;
+  try {
+    const row = styleSheet.getRow(rowNum);
+    if (cellStruck(row.getCell(2))) return true; // customer struck = cancelled
+    let filled = 0, struck = 0;
+    for (let c = 3; c <= 7; c++) { // C..G
+      const cell = row.getCell(c);
+      const raw = exVal(cell.value);
+      if (raw == null || !String(raw).trim()) continue;
+      filled++;
+      if (cellStruck(cell)) struck++;
+    }
+    return filled > 0 && struck >= Math.max(2, Math.ceil(filled / 2));
+  } catch {
+    return false;
+  }
 }
 
 function parseDaySheet(sheet, dayName, styleSheet) {
@@ -402,6 +430,7 @@ function parseDaySheet(sheet, dayName, styleSheet) {
       crew,
       calledIn: calledIn != null ? String(calledIn).trim() : null,
       jobFolder: jobFolder != null ? String(jobFolder).trim().toLowerCase() : null,
+      cancelled: jobRowCancelled(styleSheet, row),
     });
   }
 
@@ -409,16 +438,18 @@ function parseDaySheet(sheet, dayName, styleSheet) {
   // Bold names = foremen / section headers; positions may move, so we scan
   // the region instead of hardcoding rows. Falls back to the fixed layout
   // if styles are unavailable.
-  let crews, pools;
+  let crews, pools, unavailable, unassigned;
   const grid = styleSheet ? buildRosterGrid(styleSheet) : null;
   if (grid && Object.values(grid).some(c => c.bold)) {
-    ({ crews, pools } = parseRosterFromGrid(grid));
+    ({ crews, pools, unavailable, unassigned } = parseRosterFromGrid(grid));
   } else {
     crews = parseRosterCrewsFixed(sheet);
     pools = parseRosterPoolsFixed(sheet);
+    unavailable = parseRosterUnavailableFixed(sheet);
+    unassigned = [];
   }
 
-  return { day: dayName, date: dateStr, jobs, crews, pools };
+  return { day: dayName, date: dateStr, jobs, crews, pools, unavailable, unassigned };
 }
 
 // ============================================================
@@ -458,7 +489,8 @@ function buildRosterGrid(styleSheet) {
         if (!text) continue;
         const bold = !!cell.font?.bold ||
           (Array.isArray(cell.value?.richText) && cell.value.richText.some(rt => rt.font?.bold));
-        grid[`${c},${r}`] = { text, bold };
+        const strike = cellStruck(cell);
+        grid[`${c},${r}`] = { text, bold, strike };
       }
     }
   } catch (e) {
@@ -470,9 +502,19 @@ function buildRosterGrid(styleSheet) {
 
 function gridCell(grid, c, r) { return grid[`${c},${r}`] || null; }
 
+// Cells that can't be a person's name (labels, qual letters, long notes)
+function isNameLike(text) {
+  if (!text || text.length < 2 || text.length > 25) return false;
+  if (QUAL_RE.test(text)) return false;
+  if (/\d{3,}/.test(text)) return false;       // PO numbers etc.
+  if (/[:?]/.test(text)) return false;         // notes / labels
+  return true;
+}
+
 function parseRosterFromGrid(grid) {
   const crews = {};
   const headers = []; // {col,row,text,kind}
+  const claimed = new Set(); // "col,row" keys accounted for by a section
 
   for (const key of Object.keys(grid)) {
     const cell = grid[key];
@@ -481,14 +523,24 @@ function parseRosterFromGrid(grid) {
     if (cell.text.length < 2) continue;
     const [c, r] = key.split(',').map(Number);
     headers.push({ col: c, row: r, text: cell.text, kind: POOL_RE.test(cell.text) ? 'pool' : 'foreman' });
+    claimed.add(key);
   }
   headers.sort((a, b) => a.row - b.row || a.col - b.col);
 
   const firstPoolRow = Math.min(...headers.filter(h => h.kind === 'pool').map(h => h.row), Infinity);
-  const boldAt = (c, r) => !!gridCell(grid, c, r)?.bold;
+  const unavailable = []; // {name, foreman} — out sick / vacation / crossed out
+
+  // Rows sitting directly above a foreman header are reserved for that
+  // foreman's out (vacation/injured) names — the crew above must not absorb them.
+  const foremanRowsByCol = {};
+  for (const h of headers) {
+    if (h.kind !== 'foreman' || h.row >= firstPoolRow) continue;
+    (foremanRowsByCol[h.col] = foremanRowsByCol[h.col] || new Set()).add(h.row);
+  }
 
   // Foreman crews: members directly below the bold name in the same column,
   // until a blank cell, another bold cell, or the pool section.
+  // A struck-through member is crossed off — treat as unavailable.
   for (const h of headers) {
     if (h.kind !== 'foreman') continue;
     if (h.row >= firstPoolRow) continue; // bold names inside pool area aren't foremen
@@ -497,14 +549,37 @@ function parseRosterFromGrid(grid) {
     for (let r = h.row + 1; r <= ROSTER_ROW_MAX; r++) {
       const cell = gridCell(grid, h.col, r);
       if (!cell || cell.bold || r >= firstPoolRow) break;
+      if (foremanRowsByCol[h.col]?.has(r + 1)) break; // slot above next foreman = their out list
+      claimed.add(`${h.col},${r}`);
       if (QUAL_RE.test(cell.text)) continue;
       const q = gridCell(grid, h.col + 1, r);
+      if (q && QUAL_RE.test(q.text)) claimed.add(`${h.col + 1},${r}`);
+      if (cell.strike) { unavailable.push({ name: cell.text, foreman: h.text, reason: 'crossed out' }); continue; }
       members.push({ name: cell.text, qual: q && QUAL_RE.test(q.text) ? q.text.toUpperCase() : null });
     }
+    if (qualHere && QUAL_RE.test(qualHere.text)) claimed.add(`${h.col + 1},${h.row}`);
     crews[h.text] = {
       members,
       qual: qualHere && QUAL_RE.test(qualHere.text) ? qualHere.text.toUpperCase() : null,
     };
+  }
+
+  // Names written directly ABOVE a foreman's bold name are that crew's guys
+  // who are out (vacation / injured) for the day → unavailable.
+  for (const h of headers) {
+    if (h.kind !== 'foreman' || h.row >= firstPoolRow) continue;
+    const found = [];
+    for (let r = h.row - 1; r >= ROSTER_ROW_MIN; r--) {
+      const key = `${h.col},${r}`;
+      const cell = gridCell(grid, h.col, r);
+      if (!cell || cell.bold || claimed.has(key)) break;
+      if (!isNameLike(cell.text)) break;
+      claimed.add(key);
+      const q = gridCell(grid, h.col + 1, r);
+      if (q && QUAL_RE.test(q.text)) claimed.add(`${h.col + 1},${r}`);
+      found.unshift({ name: cell.text, foreman: h.text, reason: 'listed above crew' });
+    }
+    unavailable.push(...found);
   }
 
   // Pools: names below each bold pool header. Laborers/Drivers use their own
@@ -521,7 +596,9 @@ function parseRosterFromGrid(grid) {
       for (let c = h.col; c <= colEnd; c++) {
         const cell = gridCell(grid, c, r);
         if (!cell || cell.bold) continue;
+        claimed.add(`${c},${r}`);
         if (QUAL_RE.test(cell.text)) continue;
+        if (cell.strike) { unavailable.push({ name: cell.text, foreman: null, reason: 'crossed out' }); any = true; continue; }
         target.push({ name: cell.text });
         any = true;
       }
@@ -529,7 +606,45 @@ function parseRosterFromGrid(grid) {
     }
   }
 
-  return { crews, pools };
+  // Anything name-like left in the roster region that no section claimed
+  // has no crew — surface it as UNASSIGNED instead of silently dropping it.
+  const unassigned = [];
+  for (const key of Object.keys(grid)) {
+    if (claimed.has(key)) continue;
+    const cell = grid[key];
+    if (cell.bold || !isNameLike(cell.text)) continue;
+    if (cell.strike) { unavailable.push({ name: cell.text, foreman: null, reason: 'crossed out' }); continue; }
+    unassigned.push({ name: cell.text });
+  }
+
+  return { crews, pools, unavailable, unassigned };
+}
+
+// Fixed-layout unavailable detection: check the rows directly above each
+// foreman band header for names (band 1 header row 8 → rows 5-7; band 2
+// header row 14 → row 13, since row 12 still belongs to band 1).
+function parseRosterUnavailableFixed(sheet) {
+  const unavailable = [];
+  const nameCols = ['Q', 'S', 'U', 'W'];
+  const bands = [
+    { headerRow: 8, aboveRows: [7, 6, 5] },
+    { headerRow: 14, aboveRows: [13] },
+  ];
+  for (const band of bands) {
+    for (const col of nameCols) {
+      const foreman = cellVal(sheet, `${col}${band.headerRow}`);
+      if (!foreman || !String(foreman).trim()) continue;
+      const found = [];
+      for (const r of band.aboveRows) {
+        const v = cellVal(sheet, `${col}${r}`);
+        if (!v || typeof v !== 'string' || !v.trim()) break;
+        if (!isNameLike(v.trim())) break;
+        found.unshift({ name: v.trim(), foreman: String(foreman).trim(), reason: 'listed above crew' });
+      }
+      unavailable.push(...found);
+    }
+  }
+  return unavailable;
 }
 
 // ============================================================

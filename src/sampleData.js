@@ -32,6 +32,21 @@ function buildCrews() {
   };
 }
 
+// Demo examples of the roster status features:
+// - "listed above crew" = name written above the foreman's bold name (vacation/injured)
+// - "crossed out" = struck through in the sheet
+function buildUnavailable() {
+  return [
+    { name: "Danny", foreman: "Phil", reason: "listed above crew" },
+    { name: "Big Mike", foreman: "Eddie", reason: "crossed out" },
+  ];
+}
+
+// Names sitting in the roster area that don't belong to any crew or pool
+function buildUnassigned() {
+  return [{ name: "New Guy" }];
+}
+
 function buildPools() {
   return {
     laborers: [{ name: "Peter K" },{ name: "Brian D" },{ name: "Patrick" },{ name: "Marc D" },{ name: "Tim H" }],
@@ -43,12 +58,12 @@ function buildPools() {
 export const SAMPLE_DATA = {
   Sunday: { day:"Sunday",date:"2026-03-22", jobs:[
     {num:1,customer:"RMV",poJob:"16632",location:"490 Forest Ave Brockton",onsiteTime:"6am",trucks:"Hub 5",numMen:6,crew:["Eddie","Matt","Ricky","Oscar","Phil","Pete","Pat-t"],calledIn:"D",jobFolder:"sm"},
-  ], crews:buildCrews(), pools:buildPools() },
+  ], crews:buildCrews(), pools:buildPools(), unavailable:buildUnavailable(), unassigned:buildUnassigned() },
   Monday: { day:"Monday",date:"2026-03-23", jobs:[
     {num:1,customer:"Hilton Back Bay",poJob:"16332",location:"40 Dalton St Boston",onsiteTime:"6:30am",trucks:"na",numMen:5,crew:["Jeremy","Colby","John D","Brian D","Dave O"],calledIn:"R",jobFolder:null},
     {num:9,customer:"Vialto",poJob:"16957",location:"100 Cambridge St Fl 14 Boston",onsiteTime:"6pm",trucks:"Hub 2",numMen:2,crew:["Ayotte","Kritter","Mike-T"],calledIn:"J",jobFolder:null},
     {num:10,customer:"Hilton Back Bay",poJob:null,location:"40 Dalton St Boston",onsiteTime:"1:30pm",trucks:"HUB 7,3",numMen:5,crew:["Ronny","Trea","Dom C","Johnny","Scott"],calledIn:"R",jobFolder:null},
-  ], crews:buildCrews(), pools:buildPools() },
+  ], crews:buildCrews(), pools:buildPools(), unavailable:buildUnavailable(), unassigned:buildUnassigned() },
   Tuesday: { day:"Tuesday",date:"2026-03-24", jobs:[
     {num:1,customer:"Hilton Back Bay",poJob:"16332",location:"40 Dalton St Boston",onsiteTime:"6:30am",trucks:"na",numMen:9,crew:["Jeremy","Colby","John D","Brian D","Dave O","Craig","Juan","Brian","Neil","Pete"],calledIn:"R",jobFolder:null},
     {num:2,customer:"Atreides",poJob:"17027",location:"1 International Place Fl 44 Boston",onsiteTime:"6am",trucks:"van",numMen:2,crew:["Eddie","Oscar"],calledIn:"G",jobFolder:"sm"},
@@ -57,12 +72,12 @@ export const SAMPLE_DATA = {
     {num:5,customer:"Vialto",poJob:"16957",location:"10 Winthrop Sq Boston",onsiteTime:"6am",trucks:"na",numMen:2,crew:["Ayotte","Kritter"],calledIn:"J",jobFolder:"sm"},
     {num:6,customer:"OPOS",poJob:"17203",location:"1 PO Square Fl12 Boston",onsiteTime:"6am",trucks:"n/a",numMen:1,crew:["Craig"],calledIn:"R",jobFolder:null},
     {num:10,customer:"Hilton Back Bay",poJob:null,location:"40 Dalton St Boston",onsiteTime:"1:30pm",trucks:"na",numMen:5,crew:["Ronny","Trea","Dom C","Johnny","Scott"],calledIn:"R",jobFolder:null},
-  ], crews:buildCrews(), pools:buildPools() },
+  ], crews:buildCrews(), pools:buildPools(), unavailable:buildUnavailable(), unassigned:buildUnassigned() },
   Wednesday: { day:"Wednesday",date:"2026-03-25", jobs:[
     {num:1,customer:"Hilton Back Bay",poJob:"16332",location:"40 Dalton St Boston",onsiteTime:"6:30am",trucks:"na",numMen:9,crew:["Jeremy","Colby","John D","Brian D","Dave O","Juan","Brian","Neil","Pete"],calledIn:"R",jobFolder:null},
     {num:2,customer:"DFCI",poJob:"17168",location:"50 Industrial Ave Hyde Park",onsiteTime:"6am",trucks:"Hub 3",numMen:2,crew:["Matt","Ricky","Mike-T"],calledIn:"D",jobFolder:null},
     {num:3,customer:"Ligris",poJob:"16073a",location:"20 Park Plaza Fl 12 Boston",onsiteTime:"6am",trucks:"Hub 5",numMen:2,crew:["Eddie","Oscar","Pat-T"],calledIn:"D",jobFolder:"y"},
-    {num:4,customer:"Camp Harbor View",poJob:"15407a",location:"135 Morrissey Blvd Boston",onsiteTime:"6am",trucks:"1",numMen:2,crew:["Craig","Moe","Draper-t"],calledIn:"R",jobFolder:null},
+    {num:4,customer:"Camp Harbor View",poJob:"15407a",location:"135 Morrissey Blvd Boston",onsiteTime:"6am",trucks:"1",numMen:2,crew:["Craig","Moe","Draper-t"],calledIn:"R",jobFolder:null,cancelled:true},
     {num:5,customer:"Ligris",poJob:"16073B",location:"1188 Centre St Newton Centre",onsiteTime:null,trucks:"Hub 5",numMen:1,crew:["Pat-T"],calledIn:"D",jobFolder:null},
     {num:6,customer:"Vialto",poJob:"16957",location:"10 Winthrop Sq Boston",onsiteTime:"6am",trucks:"Hub 7",numMen:1,crew:["Ayotte","Kritter","Draper-T"],calledIn:"JE",jobFolder:null},
     {num:7,customer:"Finn Partners",poJob:"16236D",location:"200 State St Fl 3 Boston",onsiteTime:"7am",trucks:"Hub 7",numMen:1,crew:["Ayotte","Kritter","Draper-T"],calledIn:"JE",jobFolder:"y"},
@@ -70,7 +85,7 @@ export const SAMPLE_DATA = {
     {num:9,customer:"Mastercard Boston",poJob:"16872",location:"225 Franklin St Fl9 Boston",onsiteTime:"4pm",trucks:"Hub 2",numMen:2,crew:["Phil","Weeb","Pat-T"],calledIn:"G",jobFolder:"y"},
     {num:10,customer:"Hilton Back Bay",poJob:null,location:"40 Dalton St Boston",onsiteTime:"1:30pm",trucks:"Hub 6,4",numMen:5,crew:["Ronny","Trea","Dom C","Johnny","Scott"],calledIn:"R",jobFolder:null},
     {num:11,customer:"Metal Run",poJob:null,location:null,onsiteTime:null,trucks:"Hub 2",numMen:1,crew:["Pat-T"],calledIn:null,jobFolder:null},
-  ], crews:buildCrews(), pools:buildPools() },
+  ], crews:buildCrews(), pools:buildPools(), unavailable:buildUnavailable(), unassigned:buildUnassigned() },
   Thursday: { day:"Thursday",date:"2026-03-26", jobs:[
     {num:1,customer:"Hilton Back Bay",poJob:"16332",location:"40 Dalton St Boston",onsiteTime:"6:30am",trucks:"na",numMen:8,crew:["Jeremy","Colby","John D","Brian D","Dave O","Juan","Brian","Emanny","Pete"],calledIn:"R",jobFolder:null},
     {num:2,customer:"Boston Globe",poJob:"16123",location:"53 State St Boston",onsiteTime:"6am",trucks:"Hub 7",numMen:5,crew:["Eddie","Rich","Oscar","Jenny","Longo","Pat-T","Neil"],calledIn:"D",jobFolder:"y"},
@@ -78,10 +93,10 @@ export const SAMPLE_DATA = {
     {num:4,customer:"Congress Asset Mgmt",poJob:"16621B",location:"2 Seaport Ln Boston",onsiteTime:"6am",trucks:"van",numMen:2,crew:["Ayotte","Kritter"],calledIn:"D",jobFolder:"y"},
     {num:5,customer:"Highland Strategy",poJob:"17014a",location:"101 Arch St Suite 1560 Boston",onsiteTime:"7am",trucks:"na",numMen:4,crew:["Matt","Ricky","Pat C","Christian"],calledIn:"D",jobFolder:null},
     {num:6,customer:"Alnylam",poJob:"17010",location:"300 Third St Fl 2 Boston",onsiteTime:"6am",trucks:"1, Hub 7",numMen:4,crew:["Phil","Dave","Chitunda","Kevin H","Chris R","Draper-t","Pat-T"],calledIn:"G",jobFolder:null},
-    {num:7,customer:"Schneider Electric",poJob:"16484A",location:"115 Federal St Fl 10-11 Boston",onsiteTime:"7am",trucks:"n/a",numMen:2,crew:["Craig","Moe"],calledIn:"R",jobFolder:"y"},
+    {num:7,customer:"Schneider Electric",poJob:"16484A",location:"115 Federal St Fl 10-11 Boston",onsiteTime:"7am",trucks:"n/a",numMen:2,crew:["Craig","Moe"],calledIn:"R",jobFolder:"y",cancelled:true},
     {num:8,customer:"Camp Harbor View",poJob:"15407a",location:"135 Morrissey Blvd Boston",onsiteTime:"6am",trucks:"Hub 5",numMen:2,crew:["Craig","Moe","Mike-t"],calledIn:"R",jobFolder:"n"},
     {num:10,customer:"Hilton Back Bay",poJob:null,location:"40 Dalton St Boston",onsiteTime:"1:30pm",trucks:"2",numMen:5,crew:["Ronny","Trea","Dom C","Johnny","Scott"],calledIn:"R",jobFolder:null},
-  ], crews:buildCrews(), pools:buildPools() },
+  ], crews:buildCrews(), pools:buildPools(), unavailable:buildUnavailable(), unassigned:buildUnassigned() },
   Friday: { day:"Friday",date:"2026-03-27", jobs:[
     {num:1,customer:"Hilton Back Bay",poJob:"16332",location:"40 Dalton St Boston",onsiteTime:"6:30am",trucks:"na",numMen:9,crew:["Jeremy","Colby","John D","Brian D","Dave O","Juan","Brian","Emanny","Pete"],calledIn:"R",jobFolder:null},
     {num:2,customer:"KKR",poJob:"16972",location:"2 International Place Fl 9 Boston",onsiteTime:"6am",trucks:"1",numMen:6,crew:["Phil","Dave","Kevin H","Mark","Kritter","Weeb","Mike-T"],calledIn:"D",jobFolder:"n"},
@@ -95,11 +110,11 @@ export const SAMPLE_DATA = {
     {num:11,customer:"Hilton Back Bay",poJob:null,location:"40 Dalton St Boston",onsiteTime:"1:30pm",trucks:"1",numMen:5,crew:["Ronny","Trea","Dom C","Johnny","Scott"],calledIn:"R",jobFolder:null},
     {num:12,customer:"Star Sales Pick up",poJob:null,location:null,onsiteTime:null,trucks:"1",numMen:1,crew:["Pat-t"],calledIn:null,jobFolder:"n"},
     {num:13,customer:"Congress Asset Mgmt",poJob:"16621B",location:"2 Seaport Ln Boston",onsiteTime:null,trucks:"van",numMen:1,crew:["Ayotte"],calledIn:"D",jobFolder:"n"},
-  ], crews:buildCrews(), pools:buildPools() },
+  ], crews:buildCrews(), pools:buildPools(), unavailable:buildUnavailable(), unassigned:buildUnassigned() },
   Saturday: { day:"Saturday",date:"2026-03-28", jobs:[
     {num:1,customer:"Moody Lynn",poJob:"16492",location:"1 Beacon St 23rd Fl Boston",onsiteTime:null,trucks:"1",numMen:null,crew:["Eddie","Matt","Draper-T"],calledIn:"G",jobFolder:"y"},
     {num:2,customer:"KKR",poJob:"16972",location:"2 International Place Fl 9 Boston",onsiteTime:"6am",trucks:"1",numMen:6,crew:["Phil","Dave","Jenny","Kritter","Ayotte","Brian","Draper"],calledIn:"D",jobFolder:null},
-  ], crews:buildCrews(), pools:buildPools() },
+  ], crews:buildCrews(), pools:buildPools(), unavailable:buildUnavailable(), unassigned:buildUnassigned() },
 };
 
 export { FOREMAN_ORDER };

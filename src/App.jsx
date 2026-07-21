@@ -122,7 +122,7 @@ function isOvertimeStart(t){
 }
 
 function getConflictsForDay(dayData){
-  const jobs=dayData?.jobs||[];
+  const jobs=(dayData?.jobs||[]).filter(j=>!j.cancelled);
   const personMap={};
   for(const job of jobs){
     for(const name of (job.crew||[])){
@@ -159,22 +159,25 @@ function JobsTable({dayData,flashedJobs}){
   const matchesQuery=j=>!q||[j.customer,j.location,j.poJob,j.calledIn,...(j.crew||[])]
     .some(v=>v&&String(v).toLowerCase().includes(q));
   const visibleJobs=jobs.filter(matchesQuery);
-  // Group overtime jobs together at the bottom, keeping sheet order within each group
-  const regularJobs=visibleJobs.filter(j=>!isOvertimeStart(j.onsiteTime));
-  const otJobs=visibleJobs.filter(j=>isOvertimeStart(j.onsiteTime));
-  const orderedJobs=[...regularJobs,...otJobs];
-  const unassigned=jobs.filter(j=>!j.crew?.length);
+  // Cancelled (struck-through in the sheet) jobs group at the very bottom;
+  // active jobs split into regular then overtime, keeping sheet order in each group
+  const activeAll=jobs.filter(j=>!j.cancelled);
+  const regularJobs=visibleJobs.filter(j=>!j.cancelled&&!isOvertimeStart(j.onsiteTime));
+  const otJobs=visibleJobs.filter(j=>!j.cancelled&&isOvertimeStart(j.onsiteTime));
+  const cancelledJobs=visibleJobs.filter(j=>j.cancelled);
+  const orderedJobs=[...regularJobs,...otJobs,...cancelledJobs];
+  const unassigned=activeAll.filter(j=>!j.crew?.length);
   // Headcount: only count real people (exclude stop labels and driver tags)
-  const hcMismatches=jobs.filter(j=>{
+  const hcMismatches=activeAll.filter(j=>{
     if(j.numMen==null) return false;
     const persons=(j.crew||[]).filter(n=>!isNonPerson(n));
     return persons.length>0&&j.numMen!==persons.length;
   });
   const hasIssues=multiJobs.length>0||unassigned.length>0||hcMismatches.length>0;
-  // Day totals
-  const totalMen=jobs.reduce((s,j)=>s+(j.numMen||0),0);
-  const uniqueCrew=new Set(jobs.flatMap(j=>(j.crew||[]).filter(n=>!isNonPerson(n)))).size;
-  const totalTrucks=jobs.filter(j=>j.trucks&&!/^(na|n\/a)$/i.test(j.trucks.trim())).length;
+  // Day totals — cancelled jobs don't count toward men/trucks/jobs
+  const totalMen=activeAll.reduce((s,j)=>s+(j.numMen||0),0);
+  const uniqueCrew=new Set(activeAll.flatMap(j=>(j.crew||[]).filter(n=>!isNonPerson(n)))).size;
+  const totalTrucks=activeAll.filter(j=>j.trucks&&!/^(na|n\/a)$/i.test(j.trucks.trim())).length;
   return(
     <div>
       {/* Search / filter */}
@@ -238,12 +241,13 @@ function JobsTable({dayData,flashedJobs}){
       )}
       {isMobile?(
         <>
-          <MobileJobCards orderedJobs={orderedJobs} otJobs={otJobs} regularJobs={regularJobs} dayData={dayData} multiCounts={multiCounts} hlPerson={hlPerson} togglePerson={togglePerson} isForeman={isForeman} colorOf={colorOf} flashedJobs={flashedJobs}/>
+          <MobileJobCards orderedJobs={orderedJobs} otJobs={otJobs} regularJobs={regularJobs} cancelledJobs={cancelledJobs} dayData={dayData} multiCounts={multiCounts} hlPerson={hlPerson} togglePerson={togglePerson} isForeman={isForeman} colorOf={colorOf} flashedJobs={flashedJobs}/>
           <div style={{marginTop:"10px",padding:"8px 12px",borderRadius:"6px",background:"rgba(255,255,255,0.02)",fontSize:"11px",color:"#7a8599",fontFamily:"'JetBrains Mono',monospace",display:"flex",gap:"12px",flexWrap:"wrap"}}>
             <span><b style={{color:"#e8a948"}}>{totalMen}</b> men</span>
             <span><b style={{color:"#e2e8f0"}}>{uniqueCrew}</b> unique</span>
-            <span><b style={{color:"#e2e8f0"}}>{jobs.length}</b> jobs</span>
+            <span><b style={{color:"#e2e8f0"}}>{activeAll.length}</b> jobs</span>
             {otJobs.length>0&&<span><b style={{color:"#facc15"}}>{otJobs.length}</b> OT</span>}
+            {cancelledJobs.length>0&&<span><b style={{color:"#ef4444"}}>{cancelledJobs.length}</b> cancelled</span>}
             <span><b style={{color:"#10b981"}}>{totalTrucks}</b> w/ truck</span>
           </div>
         </>
@@ -256,17 +260,19 @@ function JobsTable({dayData,flashedJobs}){
             )}
           </tr></thead>
           <tbody>{orderedJobs.map((job,i)=>{
-            const noCrewFlag=!job.crew?.length;
+            const isCancelled=!!job.cancelled;
+            const noCrewFlag=!isCancelled&&!job.crew?.length;
             const persons=(job.crew||[]).filter(n=>!isNonPerson(n));
-            const hcFlag=job.numMen!=null&&persons.length>0&&job.numMen!==persons.length;
+            const hcFlag=!isCancelled&&job.numMen!=null&&persons.length>0&&job.numMen!==persons.length;
             const isFlashed=flashedJobs?.has(`${dayData.day}-${job.num}`);
             const pmColor=PM_COLORS[(job.calledIn||'').toUpperCase()];
-            const isOT=isOvertimeStart(job.onsiteTime);
+            const isOT=!isCancelled&&isOvertimeStart(job.onsiteTime);
             const firstOT=isOT&&otJobs.length>0&&job===otJobs[0]&&regularJobs.length>0;
+            const firstCancelled=isCancelled&&job===cancelledJobs[0];
             const onHlJob=hlPerson?(job.crew||[]).includes(hlPerson):false;
-            const rowBg=onHlJob?"rgba(56,189,248,0.10)":isOT?"rgba(250,204,21,0.09)":noCrewFlag?"rgba(245,158,11,0.05)":i%2?"rgba(255,255,255,0.012)":"transparent";
-            const hoverBg=onHlJob?"rgba(56,189,248,0.16)":isOT?"rgba(250,204,21,0.16)":"rgba(74,158,255,0.04)";
-            const rowOpacity=hlPerson&&!onHlJob?0.3:1;
+            const rowBg=isCancelled?"rgba(239,68,68,0.06)":onHlJob?"rgba(56,189,248,0.10)":isOT?"rgba(250,204,21,0.09)":noCrewFlag?"rgba(245,158,11,0.05)":i%2?"rgba(255,255,255,0.012)":"transparent";
+            const hoverBg=isCancelled?"rgba(239,68,68,0.10)":onHlJob?"rgba(56,189,248,0.16)":isOT?"rgba(250,204,21,0.16)":"rgba(74,158,255,0.04)";
+            const rowOpacity=isCancelled?0.75:hlPerson&&!onHlJob?0.3:1;
             return(
               <Fragment key={`${job.num}-${i}`}>
               {firstOT&&(
@@ -274,11 +280,19 @@ function JobsTable({dayData,flashedJobs}){
                   ⏱ OVERTIME — starts before 6:00 AM or 2:00 PM &amp; later
                 </td></tr>
               )}
+              {firstCancelled&&(
+                <tr><td colSpan={10} style={{padding:"14px 8px 6px",fontSize:"9px",fontWeight:800,letterSpacing:"1.5px",color:"#ef4444",borderBottom:"1px solid rgba(239,68,68,0.25)"}}>
+                  ✕ CANCELLED — struck through in the log book
+                </td></tr>
+              )}
               <tr className={isFlashed?"job-flash":""} style={{borderBottom:"1px solid rgba(255,255,255,0.03)",background:rowBg,transition:"background 0.12s, opacity 0.15s",opacity:rowOpacity,boxShadow:onHlJob?"inset 0 0 0 1px rgba(56,189,248,0.35)":"none"}}
                 onMouseEnter={e=>e.currentTarget.style.background=hoverBg}
                 onMouseLeave={e=>e.currentTarget.style.background=rowBg}>
-                <td style={{padding:"10px 8px",fontWeight:800,color:isOT?"#facc15":"#4a9eff",fontFamily:"'JetBrains Mono',monospace",borderLeft:`3px solid ${isOT?"#facc15":pmColor||"transparent"}`}}>{job.num}</td>
-                <td style={{padding:"10px 8px",fontWeight:700,color:"#e2e8f0",maxWidth:"150px"}}>{job.customer}</td>
+                <td style={{padding:"10px 8px",fontWeight:800,color:isCancelled?"#ef4444":isOT?"#facc15":"#4a9eff",fontFamily:"'JetBrains Mono',monospace",borderLeft:`3px solid ${isCancelled?"#ef4444":isOT?"#facc15":pmColor||"transparent"}`}}>{job.num}</td>
+                <td style={{padding:"10px 8px",fontWeight:700,color:isCancelled?"#f87171":"#e2e8f0",maxWidth:"150px",textDecoration:isCancelled?"line-through":"none"}}>
+                  {job.customer}
+                  {isCancelled&&<span style={{marginLeft:"6px",fontSize:"8px",fontWeight:800,letterSpacing:"0.5px",padding:"1px 5px",borderRadius:"3px",background:"rgba(239,68,68,0.15)",color:"#ef4444",border:"1px solid rgba(239,68,68,0.4)",textDecoration:"none",display:"inline-block"}}>CANCELLED</span>}
+                </td>
                 <td style={{padding:"10px 8px",color:"#7a8599",fontFamily:"'JetBrains Mono',monospace",fontSize:"11px"}}>{job.poJob||"—"}</td>
                 <td style={{padding:"10px 8px",color:"#7a8599",maxWidth:"190px",fontSize:"12px"}}>{job.location||"—"}</td>
                 <td style={{padding:"10px 8px",fontWeight:700,color:isOT?"#facc15":"#e8a948",whiteSpace:"nowrap",fontFamily:"'JetBrains Mono',monospace",fontSize:"12px"}}>
@@ -325,7 +339,7 @@ function JobsTable({dayData,flashedJobs}){
               <td colSpan={6} style={{padding:"8px 8px",fontSize:"9px",fontWeight:800,letterSpacing:"1.2px",color:"#4a5568",textTransform:"uppercase"}}>Totals</td>
               <td style={{padding:"8px",fontWeight:800,textAlign:"center",fontSize:"16px",color:"#e8a948"}}>{totalMen}</td>
               <td style={{padding:"8px",fontSize:"11px",color:"#7a8599",fontFamily:"'JetBrains Mono',monospace"}}>
-                <span style={{color:"#e2e8f0",fontWeight:600}}>{uniqueCrew}</span> unique · <span style={{color:"#e2e8f0",fontWeight:600}}>{jobs.length}</span> jobs{otJobs.length>0&&<> · <span style={{color:"#facc15",fontWeight:600}}>{otJobs.length}</span> OT</>} · <span style={{color:"#10b981",fontWeight:600}}>{totalTrucks}</span> w/ truck
+                <span style={{color:"#e2e8f0",fontWeight:600}}>{uniqueCrew}</span> unique · <span style={{color:"#e2e8f0",fontWeight:600}}>{activeAll.length}</span> jobs{otJobs.length>0&&<> · <span style={{color:"#facc15",fontWeight:600}}>{otJobs.length}</span> OT</>}{cancelledJobs.length>0&&<> · <span style={{color:"#ef4444",fontWeight:600}}>{cancelledJobs.length}</span> cancelled</>} · <span style={{color:"#10b981",fontWeight:600}}>{totalTrucks}</span> w/ truck
               </td>
               <td colSpan={2}/>
             </tr>
@@ -338,28 +352,32 @@ function JobsTable({dayData,flashedJobs}){
 }
 
 // ── Mobile job cards (replaces the wide table on phones) ─────
-function MobileJobCards({orderedJobs,otJobs,regularJobs,dayData,multiCounts,hlPerson,togglePerson,isForeman,colorOf,flashedJobs}){
+function MobileJobCards({orderedJobs,otJobs,regularJobs,cancelledJobs,dayData,multiCounts,hlPerson,togglePerson,isForeman,colorOf,flashedJobs}){
   return(
     <div style={{display:"flex",flexDirection:"column",gap:"8px"}}>
       {orderedJobs.map((job,i)=>{
-        const isOT=isOvertimeStart(job.onsiteTime);
+        const isCancelled=!!job.cancelled;
+        const isOT=!isCancelled&&isOvertimeStart(job.onsiteTime);
         const firstOT=isOT&&otJobs.length>0&&job===otJobs[0]&&regularJobs.length>0;
+        const firstCancelled=isCancelled&&cancelledJobs?.length>0&&job===cancelledJobs[0];
         const onHlJob=hlPerson?(job.crew||[]).includes(hlPerson):false;
         const isFlashed=flashedJobs?.has(`${dayData.day}-${job.num}`);
         const pmColor=PM_COLORS[(job.calledIn||"").toUpperCase()];
         return(
           <Fragment key={`${job.num}-${i}`}>
             {firstOT&&<div style={{padding:"10px 4px 2px",fontSize:"9px",fontWeight:800,letterSpacing:"1.5px",color:"#facc15"}}>⏱ OVERTIME — before 6:00 AM or 2:00 PM &amp; later</div>}
+            {firstCancelled&&<div style={{padding:"10px 4px 2px",fontSize:"9px",fontWeight:800,letterSpacing:"1.5px",color:"#ef4444"}}>✕ CANCELLED — struck through in the log book</div>}
             <div className={isFlashed?"job-flash":""} style={{
               padding:"12px",borderRadius:"10px",
-              background:onHlJob?"rgba(56,189,248,0.10)":isOT?"rgba(250,204,21,0.07)":"rgba(255,255,255,0.025)",
-              border:onHlJob?"1px solid rgba(56,189,248,0.4)":isOT?"1px solid rgba(250,204,21,0.25)":"1px solid rgba(255,255,255,0.06)",
-              borderLeft:`4px solid ${isOT?"#facc15":pmColor||"rgba(255,255,255,0.1)"}`,
-              opacity:hlPerson&&!onHlJob?0.35:1,transition:"opacity 0.15s"}}>
+              background:isCancelled?"rgba(239,68,68,0.06)":onHlJob?"rgba(56,189,248,0.10)":isOT?"rgba(250,204,21,0.07)":"rgba(255,255,255,0.025)",
+              border:isCancelled?"1px solid rgba(239,68,68,0.3)":onHlJob?"1px solid rgba(56,189,248,0.4)":isOT?"1px solid rgba(250,204,21,0.25)":"1px solid rgba(255,255,255,0.06)",
+              borderLeft:`4px solid ${isCancelled?"#ef4444":isOT?"#facc15":pmColor||"rgba(255,255,255,0.1)"}`,
+              opacity:isCancelled?0.75:hlPerson&&!onHlJob?0.35:1,transition:"opacity 0.15s"}}>
               <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:"8px",flexWrap:"wrap"}}>
-                <div style={{fontSize:"15px",fontWeight:800,color:"#e2e8f0"}}>
-                  <span style={{color:isOT?"#facc15":"#4a9eff",fontFamily:"'JetBrains Mono',monospace",marginRight:"7px"}}>#{job.num}</span>
+                <div style={{fontSize:"15px",fontWeight:800,color:isCancelled?"#f87171":"#e2e8f0",textDecoration:isCancelled?"line-through":"none"}}>
+                  <span style={{color:isCancelled?"#ef4444":isOT?"#facc15":"#4a9eff",fontFamily:"'JetBrains Mono',monospace",marginRight:"7px"}}>#{job.num}</span>
                   {job.customer}
+                  {isCancelled&&<span style={{marginLeft:"6px",fontSize:"8px",fontWeight:800,letterSpacing:"0.5px",padding:"1px 5px",borderRadius:"3px",background:"rgba(239,68,68,0.15)",color:"#ef4444",border:"1px solid rgba(239,68,68,0.4)",textDecoration:"none",display:"inline-block",verticalAlign:"middle"}}>CANCELLED</span>}
                 </div>
                 <div style={{fontSize:"14px",fontWeight:800,color:isOT?"#facc15":"#e8a948",fontFamily:"'JetBrains Mono',monospace",whiteSpace:"nowrap"}}>
                   {job.onsiteTime||"TBD"}
@@ -421,10 +439,12 @@ function TVMode({data,onExit,fileMeta,error,isRefreshing}){
   const today=getTodayDayName();
   const d=data[today];
   const jobs=d?.jobs||[];
-  const regular=jobs.filter(j=>!isOvertimeStart(j.onsiteTime));
-  const ot=jobs.filter(j=>isOvertimeStart(j.onsiteTime));
-  const ordered=[...regular,...ot];
-  const totalMen=jobs.reduce((s,j)=>s+(j.numMen||0),0);
+  const active=jobs.filter(j=>!j.cancelled);
+  const regular=active.filter(j=>!isOvertimeStart(j.onsiteTime));
+  const ot=active.filter(j=>isOvertimeStart(j.onsiteTime));
+  const cancelled=jobs.filter(j=>j.cancelled);
+  const ordered=[...regular,...ot,...cancelled];
+  const totalMen=active.reduce((s,j)=>s+(j.numMen||0),0);
   const dense=jobs.length>8;
   const rowFont=dense?"2.1vh":"2.6vh";
   return(
@@ -442,9 +462,10 @@ function TVMode({data,onExit,fileMeta,error,isRefreshing}){
         </div>
         <div style={{display:"flex",alignItems:"center",gap:"2vw"}}>
           <div style={{display:"flex",gap:"1.5vw",fontSize:"2.4vh",fontFamily:"'JetBrains Mono',monospace"}}>
-            <span><b style={{color:"#4a9eff"}}>{jobs.length}</b> <span style={{color:"#4a5568"}}>JOBS</span></span>
+            <span><b style={{color:"#4a9eff"}}>{active.length}</b> <span style={{color:"#4a5568"}}>JOBS</span></span>
             <span><b style={{color:"#e8a948"}}>{totalMen}</b> <span style={{color:"#4a5568"}}>MEN</span></span>
             {ot.length>0&&<span><b style={{color:"#facc15"}}>{ot.length}</b> <span style={{color:"#4a5568"}}>OT</span></span>}
+            {cancelled.length>0&&<span><b style={{color:"#ef4444"}}>{cancelled.length}</b> <span style={{color:"#4a5568"}}>CANCELLED</span></span>}
           </div>
           <TVClock/>
           <button onClick={onExit} title="Exit TV mode (Esc)" style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.12)",color:"#9ca3af",borderRadius:"6px",padding:"0.8vh 1.2vw",fontSize:"1.8vh",cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>✕</button>
@@ -462,14 +483,17 @@ function TVMode({data,onExit,fileMeta,error,isRefreshing}){
                 </tr></thead>
                 <tbody>
                   {ordered.map((job,i)=>{
-                    const isOT=isOvertimeStart(job.onsiteTime);
+                    const isCancelled=!!job.cancelled;
+                    const isOT=!isCancelled&&isOvertimeStart(job.onsiteTime);
                     const firstOT=isOT&&ot.length>0&&job===ot[0]&&regular.length>0;
+                    const firstCancelled=isCancelled&&job===cancelled[0];
                     return(
                       <Fragment key={i}>
                         {firstOT&&<tr><td colSpan={6} style={{padding:"2vh 0.8vw 0.8vh",fontSize:"1.8vh",fontWeight:800,letterSpacing:"2px",color:"#facc15",borderBottom:"2px solid rgba(250,204,21,0.35)"}}>⏱ OVERTIME</td></tr>}
-                        <tr style={{borderBottom:"1px solid rgba(255,255,255,0.05)",background:isOT?"rgba(250,204,21,0.08)":i%2?"rgba(255,255,255,0.015)":"transparent"}}>
-                          <td style={{padding:"1.4vh 0.8vw",fontSize:rowFont,fontWeight:800,color:isOT?"#facc15":"#4a9eff",fontFamily:"'JetBrains Mono',monospace"}}>{job.num}</td>
-                          <td style={{padding:"1.4vh 0.8vw",fontSize:rowFont,fontWeight:800}}>{job.customer}</td>
+                        {firstCancelled&&<tr><td colSpan={6} style={{padding:"2vh 0.8vw 0.8vh",fontSize:"1.8vh",fontWeight:800,letterSpacing:"2px",color:"#ef4444",borderBottom:"2px solid rgba(239,68,68,0.35)"}}>✕ CANCELLED</td></tr>}
+                        <tr style={{borderBottom:"1px solid rgba(255,255,255,0.05)",background:isCancelled?"rgba(239,68,68,0.08)":isOT?"rgba(250,204,21,0.08)":i%2?"rgba(255,255,255,0.015)":"transparent",opacity:isCancelled?0.75:1}}>
+                          <td style={{padding:"1.4vh 0.8vw",fontSize:rowFont,fontWeight:800,color:isCancelled?"#ef4444":isOT?"#facc15":"#4a9eff",fontFamily:"'JetBrains Mono',monospace"}}>{job.num}</td>
+                          <td style={{padding:"1.4vh 0.8vw",fontSize:rowFont,fontWeight:800,color:isCancelled?"#f87171":undefined,textDecoration:isCancelled?"line-through":"none"}}>{job.customer}</td>
                           <td style={{padding:"1.4vh 0.8vw",fontSize:rowFont,fontWeight:800,color:isOT?"#facc15":"#e8a948",fontFamily:"'JetBrains Mono',monospace",whiteSpace:"nowrap"}}>{job.onsiteTime||"TBD"}</td>
                           <td style={{padding:"1.4vh 0.8vw",fontSize:dense?"1.8vh":"2.1vh",color:"#7a8599"}}>{job.location||"—"}</td>
                           <td style={{padding:"1.4vh 0.8vw",fontSize:dense?"1.8vh":"2.1vh"}}>
@@ -485,9 +509,11 @@ function TVMode({data,onExit,fileMeta,error,isRefreshing}){
         ):(
           <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:"1vw",height:"100%",alignContent:"start"}}>
             {DAY_ORDER.map(dn=>{
-              const dd=data[dn]; const jc=dd?.jobs?.length||0;
-              const tm=dd?.jobs?.reduce((s,j)=>s+(j.numMen||0),0)||0;
-              const oc=(dd?.jobs||[]).filter(j=>isOvertimeStart(j.onsiteTime)).length;
+              const dd=data[dn]; const act=(dd?.jobs||[]).filter(j=>!j.cancelled);
+              const jc=act.length;
+              const tm=act.reduce((s,j)=>s+(j.numMen||0),0);
+              const oc=act.filter(j=>isOvertimeStart(j.onsiteTime)).length;
+              const cc=(dd?.jobs||[]).length-jc;
               const isToday=dn===today;
               return(
                 <div key={dn} style={{borderRadius:"12px",padding:"2.5vh 0.5vw",textAlign:"center",
@@ -499,6 +525,7 @@ function TVMode({data,onExit,fileMeta,error,isRefreshing}){
                   <div style={{fontSize:"1.5vh",color:"#4a5568",letterSpacing:"1px"}}>{jc===1?"JOB":"JOBS"}</div>
                   <div style={{fontSize:"2.6vh",color:"#e8a948",fontWeight:800,marginTop:"1.5vh",fontFamily:"'JetBrains Mono',monospace"}}>{tm}<span style={{fontSize:"1.4vh",color:"#4a5568"}}> MEN</span></div>
                   {oc>0&&<div style={{fontSize:"1.9vh",fontWeight:800,color:"#facc15",marginTop:"1vh"}}>⏱ {oc} OT</div>}
+                  {cc>0&&<div style={{fontSize:"1.9vh",fontWeight:800,color:"#ef4444",marginTop:"1vh"}}>✕ {cc} CANC</div>}
                 </div>
               );
             })}
@@ -530,6 +557,7 @@ function saveChangeLog(log){
 }
 function diffJobFields(oj,nj){
   const parts=[];
+  if(!!oj.cancelled!==!!nj.cancelled) parts.push(nj.cancelled?"✕ CANCELLED (struck through)":"reinstated (strike removed)");
   if(oj.customer!==nj.customer) parts.push(`customer "${oj.customer}" → "${nj.customer}"`);
   if(oj.onsiteTime!==nj.onsiteTime) parts.push(`time ${oj.onsiteTime||"—"} → ${nj.onsiteTime||"—"}`);
   if(oj.location!==nj.location) parts.push(`location → ${nj.location||"—"}`);
@@ -590,12 +618,13 @@ function MonthCalendar({weeksCache,monthCursor,setMonthCursor,onPickDay,mode,req
     for(const day of DAY_ORDER){
       const dd=wd?.[day];
       if(!dd?.date) continue;
-      const jobs=dd.jobs||[];
+      const act=(dd.jobs||[]).filter(j=>!j.cancelled);
       idx[dd.date]={
         day,date:dd.date,
-        jobs:jobs.length,
-        men:jobs.reduce((s,j)=>s+(j.numMen||0),0),
-        ot:jobs.filter(j=>isOvertimeStart(j.onsiteTime)).length,
+        jobs:act.length,
+        men:act.reduce((s,j)=>s+(j.numMen||0),0),
+        ot:act.filter(j=>isOvertimeStart(j.onsiteTime)).length,
+        cancelled:(dd.jobs||[]).length-act.length,
       };
     }
   }
@@ -652,6 +681,7 @@ function MonthCalendar({weeksCache,monthCursor,setMonthCursor,onPickDay,mode,req
                 <span style={{fontSize:isMobile?"14px":"19px",fontWeight:900,lineHeight:1,color:"#e2e8f0"}}>{info.jobs}<span style={{fontSize:isMobile?"7px":"8px",fontWeight:800,color:"#4a5568",marginLeft:"3px"}}>JOBS</span></span>
                 <span style={{fontSize:isMobile?"10px":"12px",fontWeight:700,color:"#e8a948",fontFamily:"'JetBrains Mono',monospace"}}>{info.men} <span style={{fontSize:isMobile?"7px":"8px",color:"#4a5568"}}>MEN</span></span>
                 {info.ot>0&&<span style={{fontSize:isMobile?"8px":"9px",fontWeight:800,color:"#facc15"}}>⏱ {info.ot} OT</span>}
+                {info.cancelled>0&&<span style={{fontSize:isMobile?"8px":"9px",fontWeight:800,color:"#ef4444"}}>✕ {info.cancelled}</span>}
               </>}
             </button>
           );
@@ -768,11 +798,15 @@ function SchedulePanel({label,accentColor,schedule,onClose}){
 }
 
 // ── Crew Roster ──────────────────────────────────────────────
-function CrewRoster({crews,pools,allData}){
+function CrewRoster({crews,pools,unavailable,unassigned,allData}){
   const [selectedPerson,setSelectedPerson]=useState(null);
   const [selectedPM,setSelectedPM]=useState(null);
   if(!crews) return null;
   const foremanList=getForemanList(crews);
+  const outList=unavailable||[];
+  const unassignedList=unassigned||[];
+  const outByForeman=f=>outList.filter(u=>u.foreman===f);
+  const outNoForeman=outList.filter(u=>!u.foreman);
 
   function handleSelect(name){ setSelectedPM(null); setSelectedPerson(p=>p===name?null:name); }
   function handleSelectPM(pm){ setSelectedPerson(null); setSelectedPM(p=>p===pm?null:pm); }
@@ -795,10 +829,24 @@ function CrewRoster({crews,pools,allData}){
 
   return(
     <div>
+      {outList.length>0&&(
+        <div style={{padding:"8px 12px",borderRadius:"6px",background:"rgba(239,68,68,0.06)",border:"1px solid rgba(239,68,68,0.2)",fontSize:"11px",lineHeight:1.8,marginBottom:"14px"}}>
+          <span style={{fontWeight:800,color:"#ef4444",marginRight:"8px",letterSpacing:"0.5px"}}>🚫 UNAVAILABLE TODAY</span>
+          {outList.map((u,i)=>(
+            <span key={i}>
+              <span style={{color:"#f87171",fontWeight:700}}>{u.name}</span>
+              {u.foreman&&<span style={{color:"#4a5568"}}> ({u.foreman}'s crew)</span>}
+              <span style={{color:"#4a5568",fontStyle:"italic"}}> · {u.reason==='crossed out'?'crossed out':'vacation / injured'}</span>
+              {i<outList.length-1&&<span style={{margin:"0 10px",color:"#2d3748"}}>·</span>}
+            </span>
+          ))}
+        </div>
+      )}
       <div style={{fontSize:"10px",fontWeight:800,letterSpacing:"1.5px",color:"#4a5568",marginBottom:"12px"}}>FOREMAN CREWS</div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(190px,1fr))",gap:"10px",marginBottom:"28px"}}>
         {foremanList.map((f,fi)=>{
           const crew=crews[f]; const color=foremanColor(f,fi);
+          const crewOut=outByForeman(f);
           const allMembers=[f,...(crew?.members||[]).map(m=>m.name)];
           const working=allMembers.filter(n=>DAY_ORDER.some(day=>(allData?.[day]?.jobs||[]).some(j=>(j.crew||[]).includes(n)))).length;
           const total=allMembers.length;
@@ -814,6 +862,17 @@ function CrewRoster({crews,pools,allData}){
                 <div style={{height:"100%",borderRadius:"2px",width:`${pct}%`,background:utilColor,transition:"width 0.3s"}}/>
               </div>
               <div style={{display:"flex",flexDirection:"column",gap:"3px"}}>
+                {crewOut.map((u,i)=>(
+                  <div key={`out-${i}`} title={u.reason==='crossed out'?'Crossed out in the log book':'Listed above the crew — out on vacation or injured'} style={{
+                    display:"flex",alignItems:"center",justifyContent:"space-between",
+                    padding:"4px 8px",borderRadius:"4px",
+                    background:"rgba(239,68,68,0.05)",border:"1px dashed rgba(239,68,68,0.3)",
+                    fontSize:"12px",color:"#7a8599",opacity:0.8,
+                  }}>
+                    <span style={{textDecoration:u.reason==='crossed out'?'line-through':'none'}}>{u.name}</span>
+                    <span style={{fontSize:"8px",fontWeight:800,letterSpacing:"0.5px",padding:"1px 5px",borderRadius:"3px",background:"rgba(239,68,68,0.12)",color:"#ef4444"}}>OUT</span>
+                  </div>
+                ))}
                 <button onClick={()=>handleSelect(f)} style={{
                   display:"flex",alignItems:"center",justifyContent:"space-between",
                   padding:"4px 8px",borderRadius:"4px",width:"100%",textAlign:"left",fontFamily:"inherit",
@@ -870,10 +929,12 @@ function CrewRoster({crews,pools,allData}){
 
       <div style={{fontSize:"10px",fontWeight:800,letterSpacing:"1.5px",color:"#4a5568",marginBottom:"12px"}}>AVAILABLE POOL</div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(210px,1fr))",gap:"10px"}}>
-        {[{title:"LABORERS",data:pools?.laborers||[],accent:"#10b981"},{title:"DRIVERS",data:pools?.drivers||[],accent:"#e8a948"},{title:"EXTRA",data:pools?.extra||[],accent:"#a78bfa"}].map(sec=>
+        {[{title:"LABORERS",data:pools?.laborers||[],accent:"#10b981"},{title:"DRIVERS",data:pools?.drivers||[],accent:"#e8a948"},{title:"EXTRA",data:pools?.extra||[],accent:"#a78bfa"},
+          ...(unassignedList.length?[{title:"UNASSIGNED",data:unassignedList,accent:"#f59e0b",hint:"On the roster but not under any crew or pool"}]:[])].map(sec=>
           <div key={sec.title} style={{background:"rgba(255,255,255,0.02)",borderRadius:"8px",border:"1px solid rgba(255,255,255,0.06)",padding:"12px"}}>
             <div style={{fontSize:"10px",fontWeight:800,letterSpacing:"1.5px",color:sec.accent,marginBottom:"8px",borderBottom:`1px solid ${sec.accent}25`,paddingBottom:"6px"}}>
               {sec.title} <span style={{color:"#444",fontWeight:400}}>({sec.data.length})</span>
+              {sec.hint&&<div style={{fontSize:"9px",fontWeight:400,letterSpacing:"0",color:"#6b7789",marginTop:"3px",textTransform:"none"}}>{sec.hint}</div>}
             </div>
             <div style={{display:"flex",flexWrap:"wrap",gap:"4px"}}>
               {sec.data.map((p,i)=>
@@ -897,8 +958,10 @@ function WeekOverview({data,selectedDay,onSelectDay}){
   return(
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:"8px"}}>
       {DAY_ORDER.map(dn=>{
-        const d=data[dn]; const jc=d?.jobs?.length||0; const tm=d?.jobs?.reduce((s,j)=>s+(j.numMen||0),0)||0;
-        const otc=(d?.jobs||[]).filter(j=>isOvertimeStart(j.onsiteTime)).length;
+        const d=data[dn]; const act=(d?.jobs||[]).filter(j=>!j.cancelled);
+        const jc=act.length; const tm=act.reduce((s,j)=>s+(j.numMen||0),0);
+        const otc=act.filter(j=>isOvertimeStart(j.onsiteTime)).length;
+        const cc=(d?.jobs||[]).length-jc;
         const isToday=dn===getTodayDayName(); const isSel=dn===selectedDay;
         return(
           <button key={dn} onClick={()=>onSelectDay(dn)} style={{
@@ -911,6 +974,7 @@ function WeekOverview({data,selectedDay,onSelectDay}){
             <div style={{fontSize:"9px",color:"#4a5568",marginTop:"2px"}}>{jc===1?"JOB":"JOBS"}</div>
             <div style={{fontSize:"12px",color:"#e8a948",fontWeight:700,marginTop:"8px",fontFamily:"'JetBrains Mono',monospace"}}>{tm} <span style={{fontSize:"9px",color:"#444"}}>MEN</span></div>
             {otc>0&&<div style={{fontSize:"9px",fontWeight:800,color:"#facc15",marginTop:"4px",fontFamily:"'JetBrains Mono',monospace"}}>⏱ {otc} OT</div>}
+            {cc>0&&<div style={{fontSize:"9px",fontWeight:800,color:"#ef4444",marginTop:"4px",fontFamily:"'JetBrains Mono',monospace"}}>✕ {cc} CANCELLED</div>}
             {isToday&&<div style={{fontSize:"8px",fontWeight:800,letterSpacing:"1.2px",color:"#10b981",marginTop:"6px"}}>TODAY</div>}
           </button>
         );
@@ -1133,9 +1197,10 @@ export default function App(){
   }
 
   const cur=data[selectedDay];
-  const totalJobs=cur?.jobs?.length||0;
-  const totalMen=cur?.jobs?.reduce((s,j)=>s+(j.numMen||0),0)||0;
-  const totalTrucks=cur?.jobs?.filter(j=>j.trucks&&j.trucks!=="na"&&j.trucks!=="n/a").length||0;
+  const curActive=(cur?.jobs||[]).filter(j=>!j.cancelled);
+  const totalJobs=curActive.length;
+  const totalMen=curActive.reduce((s,j)=>s+(j.numMen||0),0);
+  const totalTrucks=curActive.filter(j=>j.trucks&&j.trucks!=="na"&&j.trucks!=="n/a").length;
 
   return(
     <div style={{minHeight:"100vh",background:"#0a0f16",color:"#e2e8f0",fontFamily:"'Inter',-apple-system,sans-serif",paddingBottom:isMobile?"70px":0}}>
@@ -1221,7 +1286,7 @@ export default function App(){
                   </div>
                 }
                 {activeTab==="schedule"&&<JobsTable dayData={cur} flashedJobs={flashedJobs}/>}
-                {activeTab==="roster"&&<CrewRoster crews={cur?.crews} pools={cur?.pools} allData={data}/>}
+                {activeTab==="roster"&&<CrewRoster crews={cur?.crews} pools={cur?.pools} unavailable={cur?.unavailable} unassigned={cur?.unassigned} allData={data}/>}
                 {activeTab==="week"&&<WeekOverview data={data} selectedDay={selectedDay} onSelectDay={d=>{setSelectedDay(d);setActiveTab("schedule");}}/>}
                 {activeTab==="month"&&<MonthCalendar weeksCache={weeksCache} monthCursor={monthCursor} setMonthCursor={setMonthCursor} onPickDay={pickCalendarDay} mode={mode} requestWeek={fetchWeek} isMobile={isMobile}/>}
                 {activeTab==="changes"&&<ChangeLogPanel changeLog={changeLog} onClear={()=>setChangeLog([])}/>}
@@ -1256,6 +1321,17 @@ export default function App(){
         </div>
         <div style={{display:"flex",alignItems:"center",gap:"6px"}}>
           <span style={{color:"#38bdf8",fontWeight:800}}>×2</span><span style={{color:"#6b7789"}}>= on multiple jobs that day</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:"6px"}}>
+          <span style={{display:"inline-block",width:"14px",height:"10px",borderRadius:"2px",background:"rgba(239,68,68,0.2)",border:"1px solid rgba(239,68,68,0.5)"}}/>
+          <span style={{color:"#ef4444",fontWeight:700,textDecoration:"line-through"}}>Red</span><span style={{color:"#6b7789"}}>= cancelled (struck through in log book)</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:"6px"}}>
+          <span style={{fontSize:"8px",fontWeight:800,padding:"1px 5px",borderRadius:"3px",background:"rgba(239,68,68,0.12)",color:"#ef4444"}}>OUT</span>
+          <span style={{color:"#6b7789"}}>= unavailable (vacation / injured / crossed out)</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:"6px"}}>
+          <span style={{color:"#f59e0b",fontWeight:800}}>UNASSIGNED</span><span style={{color:"#6b7789"}}>= on roster but not under any crew</span>
         </div>
       </div>}
 
