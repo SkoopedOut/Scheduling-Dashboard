@@ -464,6 +464,7 @@ function TVMode({data,onExit,fileMeta,error,isRefreshing}){
           <div style={{display:"flex",gap:"1.5vw",fontSize:"2.4vh",fontFamily:"'JetBrains Mono',monospace"}}>
             <span><b style={{color:"#4a9eff"}}>{active.length}</b> <span style={{color:"#4a5568"}}>JOBS</span></span>
             <span><b style={{color:"#e8a948"}}>{totalMen}</b> <span style={{color:"#4a5568"}}>MEN</span></span>
+            <span><b style={{color:"#10b981"}}>{active.filter(j=>j.trucks&&!/^(na|n\/a)$/i.test(String(j.trucks).trim())).length}</b> <span style={{color:"#4a5568"}}>TRUCKS</span></span>
             {ot.length>0&&<span><b style={{color:"#facc15"}}>{ot.length}</b> <span style={{color:"#4a5568"}}>OT</span></span>}
             {cancelled.length>0&&<span><b style={{color:"#ef4444"}}>{cancelled.length}</b> <span style={{color:"#4a5568"}}>CANCELLED</span></span>}
           </div>
@@ -478,7 +479,7 @@ function TVMode({data,onExit,fileMeta,error,isRefreshing}){
             ? <div style={{textAlign:"center",paddingTop:"20vh",fontSize:"4vh",color:"#4a5568",fontStyle:"italic"}}>No jobs scheduled today.</div>
             : <table style={{width:"100%",borderCollapse:"collapse"}}>
                 <thead><tr style={{borderBottom:"2px solid #1a2436"}}>
-                  {["#","CUSTOMER","TIME","LOCATION","CREW","PM"].map(h=>
+                  {["#","CUSTOMER","TIME","TRUCKS","LOCATION","CREW","PM"].map(h=>
                     <th key={h} style={{padding:"1vh 0.8vw",textAlign:"left",fontSize:"1.6vh",fontWeight:800,letterSpacing:"2px",color:"#4a5568"}}>{h}</th>)}
                 </tr></thead>
                 <tbody>
@@ -489,12 +490,13 @@ function TVMode({data,onExit,fileMeta,error,isRefreshing}){
                     const firstCancelled=isCancelled&&job===cancelled[0];
                     return(
                       <Fragment key={i}>
-                        {firstOT&&<tr><td colSpan={6} style={{padding:"2vh 0.8vw 0.8vh",fontSize:"1.8vh",fontWeight:800,letterSpacing:"2px",color:"#facc15",borderBottom:"2px solid rgba(250,204,21,0.35)"}}>⏱ OVERTIME</td></tr>}
-                        {firstCancelled&&<tr><td colSpan={6} style={{padding:"2vh 0.8vw 0.8vh",fontSize:"1.8vh",fontWeight:800,letterSpacing:"2px",color:"#ef4444",borderBottom:"2px solid rgba(239,68,68,0.35)"}}>✕ CANCELLED</td></tr>}
+                        {firstOT&&<tr><td colSpan={7} style={{padding:"2vh 0.8vw 0.8vh",fontSize:"1.8vh",fontWeight:800,letterSpacing:"2px",color:"#facc15",borderBottom:"2px solid rgba(250,204,21,0.35)"}}>⏱ OVERTIME</td></tr>}
+                        {firstCancelled&&<tr><td colSpan={7} style={{padding:"2vh 0.8vw 0.8vh",fontSize:"1.8vh",fontWeight:800,letterSpacing:"2px",color:"#ef4444",borderBottom:"2px solid rgba(239,68,68,0.35)"}}>✕ CANCELLED</td></tr>}
                         <tr style={{borderBottom:"1px solid rgba(255,255,255,0.05)",background:isCancelled?"rgba(239,68,68,0.08)":isOT?"rgba(250,204,21,0.08)":i%2?"rgba(255,255,255,0.015)":"transparent",opacity:isCancelled?0.75:1}}>
                           <td style={{padding:"1.4vh 0.8vw",fontSize:rowFont,fontWeight:800,color:isCancelled?"#ef4444":isOT?"#facc15":"#4a9eff",fontFamily:"'JetBrains Mono',monospace"}}>{job.num}</td>
                           <td style={{padding:"1.4vh 0.8vw",fontSize:rowFont,fontWeight:800,color:isCancelled?"#f87171":undefined,textDecoration:isCancelled?"line-through":"none"}}>{job.customer}</td>
                           <td style={{padding:"1.4vh 0.8vw",fontSize:rowFont,fontWeight:800,color:isOT?"#facc15":"#e8a948",fontFamily:"'JetBrains Mono',monospace",whiteSpace:"nowrap"}}>{job.onsiteTime||"TBD"}</td>
+                          <td style={{padding:"1.4vh 0.8vw",fontSize:dense?"1.8vh":"2.1vh",fontWeight:700,color:job.trucks&&!/^(na|n\/a)$/i.test(String(job.trucks).trim())?"#10b981":"#4a5568",fontFamily:"'JetBrains Mono',monospace",whiteSpace:"nowrap"}}>{job.trucks||"—"}</td>
                           <td style={{padding:"1.4vh 0.8vw",fontSize:dense?"1.8vh":"2.1vh",color:"#7a8599"}}>{job.location||"—"}</td>
                           <td style={{padding:"1.4vh 0.8vw",fontSize:dense?"1.8vh":"2.1vh"}}>
                             <span style={{color:"#cbd5e1"}}>{(job.crew||[]).filter(n=>!isStopLabel(n)).join("  ·  ")||"—"}</span>
@@ -930,6 +932,7 @@ function CrewRoster({crews,pools,unavailable,unassigned,allData}){
       <div style={{fontSize:"10px",fontWeight:800,letterSpacing:"1.5px",color:"#4a5568",marginBottom:"12px"}}>AVAILABLE POOL</div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(210px,1fr))",gap:"10px"}}>
         {[{title:"LABORERS",data:pools?.laborers||[],accent:"#10b981"},{title:"DRIVERS",data:pools?.drivers||[],accent:"#e8a948"},{title:"EXTRA",data:pools?.extra||[],accent:"#a78bfa"},
+          {title:"UNAVAILABLE",data:outList.map(u=>({name:u.name,tag:u.reason==='crossed out'?'crossed out':'vacation / injured',crew:u.foreman})),accent:"#ef4444",hint:"Out today — listed above their crew or crossed out",emptyText:"None today",unavailable:true},
           ...(unassignedList.length?[{title:"UNASSIGNED",data:unassignedList,accent:"#f59e0b",hint:"On the roster but not under any crew or pool"}]:[])].map(sec=>
           <div key={sec.title} style={{background:"rgba(255,255,255,0.02)",borderRadius:"8px",border:"1px solid rgba(255,255,255,0.06)",padding:"12px"}}>
             <div style={{fontSize:"10px",fontWeight:800,letterSpacing:"1.5px",color:sec.accent,marginBottom:"8px",borderBottom:`1px solid ${sec.accent}25`,paddingBottom:"6px"}}>
@@ -937,7 +940,19 @@ function CrewRoster({crews,pools,unavailable,unassigned,allData}){
               {sec.hint&&<div style={{fontSize:"9px",fontWeight:400,letterSpacing:"0",color:"#6b7789",marginTop:"3px",textTransform:"none"}}>{sec.hint}</div>}
             </div>
             <div style={{display:"flex",flexWrap:"wrap",gap:"4px"}}>
+              {sec.data.length===0&&sec.emptyText&&<span style={{fontSize:"11px",color:"#4a5568",fontStyle:"italic",padding:"3px 2px"}}>{sec.emptyText}</span>}
               {sec.data.map((p,i)=>
+                sec.unavailable?
+                <span key={i} title={p.tag+(p.crew?` — ${p.crew}'s crew`:"")} style={{
+                  padding:"3px 8px",borderRadius:"4px",
+                  background:"rgba(239,68,68,0.06)",border:"1px dashed rgba(239,68,68,0.35)",
+                  fontSize:"11px",color:"#f87171",
+                }}>
+                  <span style={{textDecoration:p.tag==='crossed out'?'line-through':'none'}}>{p.name}</span>
+                  {p.crew&&<span style={{color:"#6b7789",marginLeft:"5px",fontSize:"9px"}}>({p.crew})</span>}
+                  <span style={{color:"#8a5560",marginLeft:"5px",fontSize:"9px",fontStyle:"italic"}}>{p.tag}</span>
+                </span>
+                :
                 <button key={i} onClick={()=>handleSelect(p.name)} style={{
                   padding:"3px 8px",borderRadius:"4px",cursor:"pointer",fontFamily:"inherit",
                   background:selectedPerson===p.name?"rgba(74,158,255,0.1)":"rgba(255,255,255,0.04)",
