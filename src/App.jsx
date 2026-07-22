@@ -445,11 +445,50 @@ function TVMode({data,onExit,fileMeta,error,isRefreshing}){
   const cancelled=jobs.filter(j=>j.cancelled);
   const ordered=[...regular,...ot,...cancelled];
   const totalMen=active.reduce((s,j)=>s+(j.numMen||0),0);
-  const dense=jobs.length>8;
-  const rowFont=dense?"2.1vh":"2.6vh";
+  // Density tiers: shrink rows as the day fills up so more fits on screen
+  const n=ordered.length;
+  const dense=n>8;
+  const rowFont=n>12?"1.9vh":n>8?"2.1vh":"2.6vh";
+  const subFont=n>12?"1.7vh":dense?"1.8vh":"2.1vh";
+  const cellPad=n>12?"0.85vh 0.8vw":"1.4vh 0.8vw";
+
+  // Kiosk auto-scroll: when the job list still overflows, hold at the top,
+  // glide down slowly, hold at the bottom, then return to the top and repeat.
+  // Tapping the screen pauses (same tap that pauses view rotation).
+  const scrollRef=useRef(null);
+  useEffect(()=>{
+    const el=scrollRef.current;
+    if(!el||paused||view!==0) return;
+    let stop=false,raf=0,tmo=0;
+    const HOLD=5000;                       // dwell at top/bottom (ms)
+    const pxPerMs=el.clientHeight/15000;   // one screen height per ~15s
+    const cycle=()=>{
+      if(stop)return;
+      const max=el.scrollHeight-el.clientHeight;
+      if(max<=6){tmo=setTimeout(cycle,4000);return;} // everything fits — nothing to do
+      let last=null;
+      const down=ts=>{
+        if(stop)return;
+        if(last==null)last=ts;
+        el.scrollTop=Math.min(el.scrollTop+(ts-last)*pxPerMs,max);
+        last=ts;
+        if(el.scrollTop>=max-1){
+          tmo=setTimeout(()=>{
+            if(stop)return;
+            el.scrollTo({top:0,behavior:"smooth"});
+            tmo=setTimeout(cycle,1500);
+          },HOLD);
+        } else raf=requestAnimationFrame(down);
+      };
+      tmo=setTimeout(()=>{raf=requestAnimationFrame(down);},HOLD);
+    };
+    el.scrollTop=0;
+    cycle();
+    return()=>{stop=true;cancelAnimationFrame(raf);clearTimeout(tmo);};
+  },[paused,view,n,today]);
   return(
     <div style={{position:"fixed",inset:0,background:"#0a0f16",color:"#e2e8f0",fontFamily:"'Inter',-apple-system,sans-serif",display:"flex",flexDirection:"column",zIndex:1000,overflow:"hidden"}}>
-      <style>{`@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}`}</style>
+      <style>{`@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}} .tv-scroll{scrollbar-width:none;-ms-overflow-style:none} .tv-scroll::-webkit-scrollbar{display:none}`}</style>
       {/* TV header */}
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"2vh 3vw",borderBottom:"1px solid rgba(255,255,255,0.07)"}}>
         <div style={{display:"flex",alignItems:"baseline",gap:"2vw"}}>
@@ -473,7 +512,7 @@ function TVMode({data,onExit,fileMeta,error,isRefreshing}){
         </div>
       </div>
       {/* View body */}
-      <div style={{flex:1,overflow:"auto",padding:"2vh 3vw"}} onClick={()=>setPaused(p=>!p)}>
+      <div ref={scrollRef} className="tv-scroll" style={{flex:1,overflow:"auto",padding:"2vh 3vw"}} onClick={()=>setPaused(p=>!p)}>
         {view===0?(
           jobs.length===0
             ? <div style={{textAlign:"center",paddingTop:"20vh",fontSize:"4vh",color:"#4a5568",fontStyle:"italic"}}>No jobs scheduled today.</div>
@@ -493,15 +532,15 @@ function TVMode({data,onExit,fileMeta,error,isRefreshing}){
                         {firstOT&&<tr><td colSpan={7} style={{padding:"2vh 0.8vw 0.8vh",fontSize:"1.8vh",fontWeight:800,letterSpacing:"2px",color:"#facc15",borderBottom:"2px solid rgba(250,204,21,0.35)"}}>⏱ OVERTIME</td></tr>}
                         {firstCancelled&&<tr><td colSpan={7} style={{padding:"2vh 0.8vw 0.8vh",fontSize:"1.8vh",fontWeight:800,letterSpacing:"2px",color:"#ef4444",borderBottom:"2px solid rgba(239,68,68,0.35)"}}>✕ CANCELLED</td></tr>}
                         <tr style={{borderBottom:"1px solid rgba(255,255,255,0.05)",background:isCancelled?"rgba(239,68,68,0.08)":isOT?"rgba(250,204,21,0.08)":i%2?"rgba(255,255,255,0.015)":"transparent",opacity:isCancelled?0.75:1}}>
-                          <td style={{padding:"1.4vh 0.8vw",fontSize:rowFont,fontWeight:800,color:isCancelled?"#ef4444":isOT?"#facc15":"#4a9eff",fontFamily:"'JetBrains Mono',monospace"}}>{job.num}</td>
-                          <td style={{padding:"1.4vh 0.8vw",fontSize:rowFont,fontWeight:800,color:isCancelled?"#f87171":undefined,textDecoration:isCancelled?"line-through":"none"}}>{job.customer}</td>
-                          <td style={{padding:"1.4vh 0.8vw",fontSize:rowFont,fontWeight:800,color:isOT?"#facc15":"#e8a948",fontFamily:"'JetBrains Mono',monospace",whiteSpace:"nowrap"}}>{job.onsiteTime||"TBD"}</td>
-                          <td style={{padding:"1.4vh 0.8vw",fontSize:dense?"1.8vh":"2.1vh",fontWeight:700,color:job.trucks&&!/^(na|n\/a)$/i.test(String(job.trucks).trim())?"#10b981":"#4a5568",fontFamily:"'JetBrains Mono',monospace",whiteSpace:"nowrap"}}>{job.trucks||"—"}</td>
-                          <td style={{padding:"1.4vh 0.8vw",fontSize:dense?"1.8vh":"2.1vh",color:"#7a8599"}}>{job.location||"—"}</td>
-                          <td style={{padding:"1.4vh 0.8vw",fontSize:dense?"1.8vh":"2.1vh"}}>
+                          <td style={{padding:cellPad,fontSize:rowFont,fontWeight:800,color:isCancelled?"#ef4444":isOT?"#facc15":"#4a9eff",fontFamily:"'JetBrains Mono',monospace"}}>{job.num}</td>
+                          <td style={{padding:cellPad,fontSize:rowFont,fontWeight:800,color:isCancelled?"#f87171":undefined,textDecoration:isCancelled?"line-through":"none"}}>{job.customer}</td>
+                          <td style={{padding:cellPad,fontSize:rowFont,fontWeight:800,color:isOT?"#facc15":"#e8a948",fontFamily:"'JetBrains Mono',monospace",whiteSpace:"nowrap"}}>{job.onsiteTime||"TBD"}</td>
+                          <td style={{padding:cellPad,fontSize:subFont,fontWeight:700,color:job.trucks&&!/^(na|n\/a)$/i.test(String(job.trucks).trim())?"#10b981":"#4a5568",fontFamily:"'JetBrains Mono',monospace",whiteSpace:"nowrap"}}>{job.trucks||"—"}</td>
+                          <td style={{padding:cellPad,fontSize:subFont,color:"#7a8599"}}>{job.location||"—"}</td>
+                          <td style={{padding:cellPad,fontSize:subFont}}>
                             <span style={{color:"#cbd5e1"}}>{(job.crew||[]).filter(n=>!isStopLabel(n)).join("  ·  ")||"—"}</span>
                           </td>
-                          <td style={{padding:"1.4vh 0.8vw"}}><span style={{fontSize:"1.9vh",fontWeight:800,padding:"0.4vh 0.8vw",borderRadius:"5px",background:PM_COLORS[(job.calledIn||"").toUpperCase()]||"#2d3748",color:"#fff"}}>{(job.calledIn||"—").toUpperCase()}</span></td>
+                          <td style={{padding:cellPad}}><span style={{fontSize:"1.9vh",fontWeight:800,padding:"0.4vh 0.8vw",borderRadius:"5px",background:PM_COLORS[(job.calledIn||"").toUpperCase()]||"#2d3748",color:"#fff"}}>{(job.calledIn||"—").toUpperCase()}</span></td>
                         </tr>
                       </Fragment>
                     );
