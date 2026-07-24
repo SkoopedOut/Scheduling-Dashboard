@@ -4,8 +4,19 @@ import { personLabel, profileFor, formatPhone, ROLE_LABEL, cleanJobCrewName } fr
 // Build a schedule message for pasting into Teams.
 //
 // Teams' compose box accepts plain text and a narrow slice of
-// markdown (**bold**, bullets). It does NOT render tables, so
-// everything here is line-oriented.
+// markdown. It does NOT render tables, so everything is line-based.
+//
+// Output format (per job):
+//   Saturday 7/25
+//   Job: BNY Mellon
+//   #: 16888
+//   Address: 201 Washington St Fl 5 Boston
+//   Start Time: 6am
+//   Foreman: Phil
+//   Drivers:
+//   Mike, Weeb and Juan E
+//   Trucks:
+//       Hub 3, Hub 6, xxx079
 // ============================================================
 
 const DAY_ORDER = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
@@ -29,122 +40,169 @@ export function parseTimeToMinutes(raw) {
   if (isNaN(h)) return null;
   if (ap === 'pm' && h < 12) h += 12;
   if (ap === 'am' && h === 12) h = 0;
-  // No am/pm: a bare 1–5 on a job sheet means afternoon.
-  if (!ap && h >= 1 && h <= 5) h += 12;
+  if (!ap && h >= 1 && h <= 5) h += 12; // bare 1–5 on a job sheet = afternoon
   if (h > 23) return null;
   return h * 60 + min;
 }
 
-function fmtDate(dateStr) {
-  if (!dateStr) return '';
+// Short header date: "Saturday 7/25"
+function shortDate(dateStr, dayName) {
+  if (!dateStr) return dayName || '';
   const d = new Date(dateStr + 'T12:00:00');
-  if (isNaN(d)) return '';
-  return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  if (isNaN(d)) return dayName || '';
+  const wd = d.toLocaleDateString('en-US', { weekday: 'long' });
+  return `${wd} ${d.getMonth() + 1}/${d.getDate()}`;
 }
 
-// Resolve a job-row crew string to the name a human should read.
-function crewDisplay(raw, profiles, { useRealNames }) {
-  const cleaned = cleanJobCrewName(raw);
-  if (!cleaned) return null;
-  if (!useRealNames || !profiles) return cleaned;
-  return personLabel(profiles, cleaned);
+// "Mike, Weeb and Juan E" — Oxford-less "and" join to match the example.
+function humanJoin(names) {
+  const a = names.filter(Boolean);
+  if (a.length === 0) return '';
+  if (a.length === 1) return a[0];
+  if (a.length === 2) return `${a[0]} and ${a[1]}`;
+  return `${a.slice(0, -1).join(', ')} and ${a[a.length - 1]}`;
+}
+
+const label = (raw, profiles, useRealNames) =>
+  useRealNames && profiles ? personLabel(profiles, raw) : raw;
+
+// ── Foreman / driver classification ──────────────────────────
+// Foreman: the crew-header name(s) assigned to this job.
+// Driver: anyone tagged -T/-V on the job row, OR carrying a T/V qual
+//         in the week's roster, OR whose saved profile role implies it.
+function buildQualIndex(weekData) {
+  const drivers = new Set(); // lowercased roster names with a T/V qualification
+  for (const d of Object.values(weekData || {})) {
+    for (const c of Object.values(d.crews || {})) {
+      for (const m of c.members || []) {
+        if (m.qual && /[TV]/i.test(m.qual)) drivers.add(m.name.trim().toLowerCase());
+      }
+    }
+  }
+  return drivers;
+}
+
+// Does the raw job-row token carry an explicit -T / -V driver suffix?
+function hasDriverSuffix(raw) {
+  return /[-–]\s*[TV]\b/i.test(String(raw || ''));
+}
+
+function classifyCrew(job, dayData, weekData, driverIndex, profiles, useRealNames) {
+  const headerNames = new Set(Object.keys(dayData?.crews || {}).map(h => h.toLowerCase()));
+  const foremen = [];
+  const drivers = [];
+  const others = [];
+  const seen = new Set();
+
+  for (const raw of job.crew || []) {
+    const clean = cleanJobCrewName(raw);
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const shown = label(clean, profiles, useRealNames);
+    const isForeman = headerNames.has(key);
+    const prof = profileFor(profiles, clean);
+    const isDriver =
+      hasDriverSuffix(raw) ||
+      driverIndex.has(key) ||
+      false;
+
+    if (isForeman) foremen.push(shown);
+    else if (isDriver) drivers.push(shown);
+    else others.push(shown);
+  }
+  return { foremen, drivers, others };
+}
+
+// ── Single job block ─────────────────────────────────────────
+function jobBlock(job, dayData, weekData, driverIndex, profiles, opts) {
+  const { useRealNames, includeLocation, includePO, markOvertime, includeTrucks, includeStartTime } = opts;
+  const lines = [];
+
+  lines.push(`Job: ${job.customer}`);
+  if (includePO && job.poJob) lines.push(`#: ${job.poJob}`);
+  if (includeLocation) {
+    const addr = (job.location || '').replace(/[\r\n]+/g, ' ').replace(/\s*,\s*,\s*/g, ', ').replace(/\s+/g, ' ').trim();
+    lines.push(`Address: ${addr}`);
+  }
+
+  if (includeStartTime) {
+    const t = String(job.onsiteTime || '').trim();
+    const hasTime = t && !/^(na|n\/a|tbd)$/i.test(t);
+    const ot = markOvertime && hasTime && isOvertime(t);
+    lines.push(`Start Time: ${hasTime ? t : 'TBD'}${ot ? ' (OT)' : ''}`);
+  }
+
+  const { foremen, drivers, others } = classifyCrew(job, dayData, weekData, driverIndex, profiles, useRealNames);
+
+  // Foreman line always prints, blank when none is assigned.
+  lines.push(`Foreman: ${humanJoin(foremen)}`);
+
+  // Drivers: people with a T/V qual (or -T/-V on the job row).
+  lines.push('Drivers:');
+  if (drivers.length) lines.push(humanJoin(drivers));
+
+  // Crew: everyone else on the job (non-foreman, non-driver).
+  if (!opts.driversOnly) {
+    lines.push('Crew:');
+    if (others.length) lines.push(humanJoin(others));
+  }
+
+  if (includeTrucks) {
+    const tr = String(job.trucks || '').trim();
+    const hasTrucks = tr && !/^(na|n\/a|0)$/i.test(tr);
+    lines.push('Trucks:');
+    if (hasTrucks) lines.push(`\t${tr.replace(/[\r\n]+/g, ', ')}`);
+  }
+
+  return lines.join('\n');
 }
 
 // ── Day message ──────────────────────────────────────────────
-export function buildDayMessage(dayData, profiles, opts = {}) {
-  const {
-    useRealNames = true,
-    includePhones = false,
-    includeLocation = true,
-    includeCrew = true,
-    includePO = false,
-    markOvertime = true,
-    includeUnavailable = true,
-    skipCancelled = true,
-    heading = '',
-  } = opts;
-
+export function buildDayMessage(dayData, profiles, opts = {}, weekData = null) {
+  const o = {
+    useRealNames: true,
+    includeLocation: true,
+    includePO: true,
+    includeStartTime: true,
+    includeTrucks: true,
+    markOvertime: true,
+    skipCancelled: true,
+    driversOnly: false,
+    ...opts,
+  };
   if (!dayData) return '';
-  const lines = [];
-  const title = heading || `Schedule — ${fmtDate(dayData.date) || dayData.day}`;
-  lines.push(`**${title}**`);
 
-  const jobs = (dayData.jobs || []).filter(j => !(skipCancelled && j.cancelled));
-  if (jobs.length === 0) {
-    lines.push('', 'No jobs scheduled.');
-    return lines.join('\n');
-  }
+  const driverIndex = buildQualIndex(weekData || { [dayData.day]: dayData });
+  const jobs = (dayData.jobs || []).filter(j => !(o.skipCancelled && j.cancelled));
+  const header = o.heading || shortDate(dayData.date, dayData.day);
 
-  const totalMen = jobs.reduce((sum, j) => sum + (j.numMen || 0), 0);
-  lines.push(`${jobs.length} job${jobs.length === 1 ? '' : 's'}${totalMen ? ` · ${totalMen} men` : ''}`);
-  lines.push('');
+  if (jobs.length === 0) return `${header}\n\nNo jobs scheduled.`;
 
-  for (const job of jobs) {
-    const ot = markOvertime && isOvertime(job.onsiteTime);
-    const bits = [`**${job.num}. ${job.customer}**`];
-    const t = String(job.onsiteTime || '').trim();
-    const hasTime = t && !/^(na|n\/a|tbd)$/i.test(t);
-    if (hasTime) bits.push(`— ${t}${ot ? ' ⚠️ OT' : ''}`);
-    lines.push(bits.join(' '));
-
-    if (includeLocation && job.location) lines.push(`   ${job.location}`);
-    if (includePO && job.poJob) lines.push(`   PO ${job.poJob}`);
-
-    if (includeCrew) {
-      const crew = (job.crew || [])
-        .map(c => crewDisplay(c, profiles, { useRealNames }))
-        .filter(Boolean);
-      // De-duplicate while preserving order (foreman often repeats).
-      const seen = new Set();
-      const uniq = crew.filter(n => { const k = n.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
-      if (uniq.length) lines.push(`   Crew: ${uniq.join(', ')}`);
-
-      if (includePhones && profiles) {
-        for (const n of uniq) {
-          const p = profileFor(profiles, n);
-          if (p?.phone) lines.push(`      ${n} — ${formatPhone(p.phone)}`);
-        }
-      }
-    }
-
-    if (job.trucks && job.trucks.toLowerCase() !== 'na') lines.push(`   Trucks: ${job.trucks}`);
-    lines.push('');
-  }
-
-  if (includeUnavailable && dayData.unavailable?.length) {
-    const out = dayData.unavailable
-      .map(u => (useRealNames && profiles ? personLabel(profiles, u.name) : u.name))
-      .filter(Boolean);
-    if (out.length) lines.push(`**Out:** ${[...new Set(out)].join(', ')}`);
-  }
-
-  return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  const blocks = jobs.map(j => jobBlock(j, dayData, weekData, driverIndex, profiles, o));
+  // One date header at the top, jobs separated by a blank line.
+  return `${header}\n\n${blocks.join('\n\n')}`.replace(/\n{3,}/g, '\n\n').trimEnd();
 }
 
 // ── Week message ─────────────────────────────────────────────
 export function buildWeekMessage(weekData, profiles, opts = {}) {
   const { weekLabel = '', ...dayOpts } = opts;
   const parts = [];
-  parts.push(`**Weekly Schedule${weekLabel ? ` — ${weekLabel}` : ''}**`, '');
-
   for (const day of DAY_ORDER) {
     const d = weekData?.[day];
     if (!d) continue;
     const jobs = (d.jobs || []).filter(j => !(dayOpts.skipCancelled !== false && j.cancelled));
     if (!jobs.length) continue;
-    parts.push(buildDayMessage(d, profiles, { ...dayOpts, heading: fmtDate(d.date) || day }));
-    parts.push('---', '');
+    parts.push(buildDayMessage(d, profiles, dayOpts, weekData));
   }
-
-  if (parts.length <= 2) return `**Weekly Schedule${weekLabel ? ` — ${weekLabel}` : ''}**\n\nNo jobs scheduled.`;
-  while (parts[parts.length - 1] === '' || parts[parts.length - 1] === '---') parts.pop();
-  return parts.join('\n').trim();
+  if (parts.length === 0) return `No jobs scheduled${weekLabel ? ` for ${weekLabel}` : ''}.`;
+  return parts.join('\n\n────────\n\n').trim();
 }
 
 // ── Per-crew message ─────────────────────────────────────────
-// One foreman's jobs only — for DMing a crew lead.
-export function buildCrewMessage(dayData, foreman, profiles, opts = {}) {
-  const { useRealNames = true } = opts;
+export function buildCrewMessage(dayData, foreman, profiles, opts = {}, weekData = null) {
   if (!dayData) return '';
   const jobs = (dayData.jobs || []).filter(j => {
     if (j.cancelled && opts.skipCancelled !== false) return false;
@@ -153,19 +211,12 @@ export function buildCrewMessage(dayData, foreman, profiles, opts = {}) {
       return cleaned && cleaned.toLowerCase() === String(foreman).toLowerCase();
     });
   });
-
-  const who = useRealNames && profiles ? personLabel(profiles, foreman) : foreman;
-  if (!jobs.length) return `**${who} — ${fmtDate(dayData.date) || dayData.day}**\n\nNo jobs assigned.`;
-
-  return buildDayMessage({ ...dayData, jobs }, profiles, {
-    ...opts,
-    heading: `${who} — ${fmtDate(dayData.date) || dayData.day}`,
-    includeUnavailable: false,
-  });
+  const header = `${shortDate(dayData.date, dayData.day)} — ${label(foreman, profiles, opts.useRealNames !== false)}`;
+  if (!jobs.length) return `${header}\n\nNo jobs assigned.`;
+  return buildDayMessage({ ...dayData, jobs }, profiles, { ...opts, heading: header }, weekData);
 }
 
 // ── Coverage report ──────────────────────────────────────────
-// Which people on today's jobs still have no profile / no contact info.
 export function missingContactReport(dayData, profiles) {
   const missing = [];
   const seen = new Set();
@@ -191,7 +242,7 @@ export async function copyToClipboard(text) {
       await navigator.clipboard.writeText(text);
       return true;
     }
-  } catch { /* fall through to legacy path */ }
+  } catch { /* fall through */ }
   try {
     const ta = document.createElement('textarea');
     ta.value = text;

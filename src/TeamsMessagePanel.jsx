@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { buildDayMessage, buildWeekMessage, buildCrewMessage, missingContactReport, copyToClipboard } from './teamsMessage.js';
+import { buildDayMessage, buildWeekMessage, buildCrewMessage, copyToClipboard } from './teamsMessage.js';
 
 const S = {
   panel: { background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', padding: '16px' },
@@ -34,13 +34,13 @@ export default function TeamsMessagePanel({ weekData, selectedDay, profiles, wee
   const [copied, setCopied] = useState(false);
   const [opts, setOpts] = useState({
     useRealNames: true,
-    includeCrew: true,
     includeLocation: true,
-    includePhones: false,
-    includePO: false,
+    includePO: true,
+    includeStartTime: true,
+    includeTrucks: true,
     markOvertime: true,
-    includeUnavailable: true,
     skipCancelled: true,
+    driversOnly: false,
   });
 
   const setOpt = (k, v) => { setOpts(o => ({ ...o, [k]: v })); setCopied(false); };
@@ -50,14 +50,9 @@ export default function TeamsMessagePanel({ weekData, selectedDay, profiles, wee
 
   const message = useMemo(() => {
     if (scope === 'week') return buildWeekMessage(weekData, profiles, { ...opts, weekLabel });
-    if (scope === 'crew' && foreman) return buildCrewMessage(dayData, foreman, profiles, opts);
-    return buildDayMessage(dayData, profiles, opts);
+    if (scope === 'crew' && foreman) return buildCrewMessage(dayData, foreman, profiles, opts, weekData);
+    return buildDayMessage(dayData, profiles, opts, weekData);
   }, [scope, day, foreman, opts, weekData, dayData, profiles, weekLabel]);
-
-  const missing = useMemo(
-    () => (opts.includePhones && dayData ? missingContactReport(dayData, profiles) : []),
-    [opts.includePhones, dayData, profiles]
-  );
 
   const doCopy = async () => {
     const ok = await copyToClipboard(message);
@@ -109,25 +104,18 @@ export default function TeamsMessagePanel({ weekData, selectedDay, profiles, wee
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '8px' }}>
           <Toggle checked={opts.useRealNames} onChange={v => setOpt('useRealNames', v)}>Use real names</Toggle>
-          <Toggle checked={opts.includeCrew} onChange={v => setOpt('includeCrew', v)}>Include crew</Toggle>
           <Toggle checked={opts.includeLocation} onChange={v => setOpt('includeLocation', v)}>Include address</Toggle>
-          <Toggle checked={opts.includePhones} onChange={v => setOpt('includePhones', v)}>Include phone numbers</Toggle>
-          <Toggle checked={opts.includePO} onChange={v => setOpt('includePO', v)}>Include PO number</Toggle>
+          <Toggle checked={opts.includePO} onChange={v => setOpt('includePO', v)}>Include job #</Toggle>
+          <Toggle checked={opts.includeStartTime} onChange={v => setOpt('includeStartTime', v)}>Include start time</Toggle>
+          <Toggle checked={opts.includeTrucks} onChange={v => setOpt('includeTrucks', v)}>Include trucks</Toggle>
           <Toggle checked={opts.markOvertime} onChange={v => setOpt('markOvertime', v)}>Flag overtime</Toggle>
-          <Toggle checked={opts.includeUnavailable} onChange={v => setOpt('includeUnavailable', v)}>List who's out</Toggle>
+          <Toggle checked={opts.driversOnly} onChange={v => setOpt('driversOnly', v)}>Drivers only (hide crew line)</Toggle>
           <Toggle checked={opts.skipCancelled} onChange={v => setOpt('skipCancelled', v)}>Hide cancelled jobs</Toggle>
         </div>
 
         {opts.useRealNames && !profiles?.people?.length && (
           <div style={{ fontSize: '11px', color: '#f59e0b', marginTop: '10px' }}>
             No profiles saved yet, so the log book's own spellings will be used. Add profiles to show real names.
-          </div>
-        )}
-
-        {missing.length > 0 && (
-          <div style={{ fontSize: '11px', color: '#f59e0b', marginTop: '10px' }}>
-            No contact info for {missing.length} {missing.length === 1 ? 'person' : 'people'} on this day: {missing.slice(0, 8).map(m => m.name).join(', ')}
-            {missing.length > 8 ? '…' : ''}
           </div>
         )}
       </div>
