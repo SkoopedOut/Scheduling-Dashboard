@@ -1,5 +1,15 @@
-import { useState, useEffect, useRef, Fragment } from 'react';
+import { useState, useEffect, useRef, Fragment, lazy, Suspense } from 'react';
 import { initAuth, login, isConfigured } from './auth.js';
+import { emptyStore, loadProfiles } from './profiles.js';
+
+// Loaded on demand — these panels are only opened deliberately, so they
+// stay out of the initial bundle the TV/kiosk view has to download.
+const ProfilesPanel = lazy(() => import('./ProfilesPanel.jsx'));
+const TeamsMessagePanel = lazy(() => import('./TeamsMessagePanel.jsx'));
+
+function PanelFallback(){
+  return <div style={{padding:"60px",textAlign:"center",color:"#4a5568",fontSize:"13px"}}>Loading…</div>;
+}
 import { fetchScheduleFromSharePoint, getWeekFileInfo } from './sharepoint.js';
 import { SAMPLE_DATA, FOREMAN_ORDER } from './sampleData.js';
 
@@ -740,6 +750,8 @@ function BottomNav({activeTab,setActiveTab,todayChangeCount,selectedDay}){
     {id:"week",icon:"🗓️",l:"Week"},
     {id:"month",icon:"📆",l:"Month"},
     {id:"roster",icon:"👷",l:"Roster"},
+    {id:"people",icon:"🪪",l:"People"},
+    {id:"send",icon:"📤",l:"Send"},
     {id:"changes",icon:"🕑",l:"Changes",badge:todayChangeCount},
   ];
   return(
@@ -1059,6 +1071,15 @@ export default function App(){
   const [tvMode,setTvMode]=useState(()=>typeof window!=="undefined"&&window.location.hash==="#tv");
   const [changeLog,setChangeLog]=useState(loadChangeLog);
   const [monthCursor,setMonthCursor]=useState(()=>{const t=new Date();return new Date(t.getFullYear(),t.getMonth(),1);});
+  // Installer profiles — shared by the profiles editor and the Teams composer
+  // so real names show up in messages without reloading the file each time.
+  const [profiles,setProfiles]=useState(emptyStore());
+  useEffect(()=>{
+    if(mode!=="live") return;
+    let alive=true;
+    loadProfiles().then(p=>{ if(alive) setProfiles(p); }).catch(()=>{ /* first run: no file yet */ });
+    return()=>{alive=false;};
+  },[mode]);
   useEffect(()=>{saveChangeLog(changeLog);},[changeLog]);
   // Keep #tv in the URL so a kiosk machine can bookmark TV mode directly
   useEffect(()=>{
@@ -1299,6 +1320,8 @@ export default function App(){
           {id:"week",l:isMobile?"Week":"Week at a Glance"},
           {id:"month",l:"Month"},
           {id:"changes",l:"Changes",badge:todayChangeCount},
+          {id:"people",l:"People"},
+          {id:"send",l:"Send to Teams"},
         ].map(t=>
           <button key={t.id} onClick={()=>setActiveTab(t.id)} style={{
             padding:isMobile?"9px 12px":"10px 20px",borderRadius:"8px 8px 0 0",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",
@@ -1320,7 +1343,7 @@ export default function App(){
               <div style={{fontSize:"28px",marginBottom:"12px",animation:"spin 1s linear infinite"}}>⟳</div>
               <div>Loading {satKeyToLabel(currentWeekSat)}…</div>
             </div>
-          : Object.keys(data).length===0&&activeTab!=="month"&&activeTab!=="changes"
+          : Object.keys(data).length===0&&activeTab!=="month"&&activeTab!=="changes"&&activeTab!=="people"
             ? <div style={{padding:"80px",textAlign:"center",color:"#4a5568",fontStyle:"italic"}}>
                 {mode==="live"?"No data found for this week.":"Connect to SharePoint to load this week, or use ‹ › to browse to the sample week (Mar 22–28, 2026)."}
               </div>
@@ -1344,6 +1367,12 @@ export default function App(){
                 {activeTab==="week"&&<WeekOverview data={data} selectedDay={selectedDay} onSelectDay={d=>{setSelectedDay(d);setActiveTab("schedule");}}/>}
                 {activeTab==="month"&&<MonthCalendar weeksCache={weeksCache} monthCursor={monthCursor} setMonthCursor={setMonthCursor} onPickDay={pickCalendarDay} mode={mode} requestWeek={fetchWeek} isMobile={isMobile}/>}
                 {activeTab==="changes"&&<ChangeLogPanel changeLog={changeLog} onClear={()=>setChangeLog([])}/>}
+                {activeTab==="people"&&<Suspense fallback={<PanelFallback/>}>
+                  <ProfilesPanel weekData={data} onStoreChange={setProfiles}/>
+                </Suspense>}
+                {activeTab==="send"&&<Suspense fallback={<PanelFallback/>}>
+                  <TeamsMessagePanel weekData={data} selectedDay={selectedDay} profiles={profiles} weekLabel={getWeekLabel(data)}/>
+                </Suspense>}
               </>
         }
       </div>
