@@ -116,11 +116,20 @@ function classifyCrew(job, dayData, weekData, driverIndex, profiles, useRealName
   return { foremen, drivers, others };
 }
 
+// AM if the job starts before noon, PM if at/after noon. Blank if no time.
+function amPm(onsiteTime) {
+  const mins = parseTimeToMinutes(onsiteTime);
+  if (mins == null) return '';
+  return mins < 12 * 60 ? 'AM' : 'PM';
+}
+
 // ── Single job block ─────────────────────────────────────────
 function jobBlock(job, dayData, weekData, driverIndex, profiles, opts) {
-  const { useRealNames, includeLocation, includePO, markOvertime, includeTrucks, includeStartTime } = opts;
+  const { useRealNames, includeLocation, includePO, markOvertime, includeTrucks, includeStartTime, dayLabel } = opts;
   const lines = [];
 
+  const ap = amPm(job.onsiteTime);
+  lines.push(`${dayLabel}${ap ? ` (${ap})` : ''}`);
   lines.push(`Job: ${job.customer}`);
   if (includePO && job.poJob) lines.push(`#: ${job.poJob}`);
   if (includeLocation) {
@@ -140,22 +149,23 @@ function jobBlock(job, dayData, weekData, driverIndex, profiles, opts) {
   // Foreman line always prints, blank when none is assigned.
   lines.push(`Foreman: ${humanJoin(foremen)}`);
 
-  // Drivers: people with a T/V qual (or -T/-V on the job row).
-  lines.push('Drivers:');
-  if (drivers.length) lines.push(humanJoin(drivers));
+  // Drivers: people with a T/V qual (or -T/-V on the job row). Names inline.
+  lines.push(`Drivers: ${humanJoin(drivers)}`);
 
-  // Crew: everyone else on the job (non-foreman, non-driver).
+  // Crew: everyone else on the job (non-foreman, non-driver). Names inline.
   if (!opts.driversOnly) {
-    lines.push('Crew:');
-    if (others.length) lines.push(humanJoin(others));
+    lines.push(`Crew: ${humanJoin(others)}`);
   }
 
   if (includeTrucks) {
     const tr = String(job.trucks || '').trim();
     const hasTrucks = tr && !/^(na|n\/a|0)$/i.test(tr);
-    lines.push('Trucks:');
-    if (hasTrucks) lines.push(`\t${tr.replace(/[\r\n]+/g, ', ')}`);
+    lines.push(`Trucks: ${hasTrucks ? tr.replace(/[\r\n]+/g, ', ') : ''}`);
   }
+
+  // Blank line then a Scope of Work label for the scheduler to fill in.
+  lines.push('');
+  lines.push('Scope of Work:');
 
   return lines.join('\n');
 }
@@ -177,13 +187,13 @@ export function buildDayMessage(dayData, profiles, opts = {}, weekData = null) {
 
   const driverIndex = buildQualIndex(weekData || { [dayData.day]: dayData });
   const jobs = (dayData.jobs || []).filter(j => !(o.skipCancelled && j.cancelled));
-  const header = o.heading || shortDate(dayData.date, dayData.day);
+  const dayLabel = o.heading || shortDate(dayData.date, dayData.day);
 
-  if (jobs.length === 0) return `${header}\n\nNo jobs scheduled.`;
+  if (jobs.length === 0) return `${dayLabel}\n\nNo jobs scheduled.`;
 
-  const blocks = jobs.map(j => jobBlock(j, dayData, weekData, driverIndex, profiles, o));
-  // One date header at the top, jobs separated by a blank line.
-  return `${header}\n\n${blocks.join('\n\n')}`.replace(/\n{3,}/g, '\n\n').trimEnd();
+  const blocks = jobs.map(j => jobBlock(j, dayData, weekData, driverIndex, profiles, { ...o, dayLabel }));
+  // Each job block carries its own dated header; separate blocks by a blank line.
+  return blocks.join('\n\n').replace(/\n{4,}/g, '\n\n\n').trimEnd();
 }
 
 // ── Week message ─────────────────────────────────────────────
