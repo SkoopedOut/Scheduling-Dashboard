@@ -1,5 +1,7 @@
 import { useState, useMemo } from 'react';
 import { buildDayMessage, buildWeekMessage, buildCrewMessage, copyToClipboard } from './teamsMessage.js';
+import { sendJobChat, jobRecipients } from './graphTeams.js';
+import { isConfigured } from './auth.js';
 
 const S = {
   panel: { background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', padding: '16px' },
@@ -44,6 +46,25 @@ export default function TeamsMessagePanel({ weekData, selectedDay, profiles, wee
   });
 
   const setOpt = (k, v) => { setOpts(o => ({ ...o, [k]: v })); setCopied(false); };
+
+  // Per-job Teams send state: jobKey -> { status, note }
+  const [sendState, setSendState] = useState({});
+  const jobKey = (j) => `${day}:${j.num}:${j.customer}`;
+
+  const sendOneJob = async (job) => {
+    const key = jobKey(job);
+    setSendState(s => ({ ...s, [key]: { status: 'sending' } }));
+    try {
+      const msg = buildDayMessage({ ...dayData, jobs: [job] }, profiles, opts, weekData);
+      const res = await sendJobChat(job, msg, profiles, { topic: `${job.customer} (${day})` });
+      const noteParts = [`Sent to ${res.memberCount} ${res.memberCount === 1 ? 'person' : 'people'}`];
+      if (res.unresolved?.length) noteParts.push(`couldn't reach: ${res.unresolved.map(u => u.name).join(', ')}`);
+      if (res.missing?.length) noteParts.push(`no email: ${res.missing.map(m => m.name).join(', ')}`);
+      setSendState(s => ({ ...s, [key]: { status: 'sent', note: noteParts.join(' · '), url: res.webUrl } }));
+    } catch (e) {
+      setSendState(s => ({ ...s, [key]: { status: 'error', note: e.message } }));
+    }
+  };
 
   const dayData = weekData?.[day];
   const foremen = useMemo(() => Object.keys(dayData?.crews || {}).sort(), [dayData]);
@@ -140,10 +161,69 @@ export default function TeamsMessagePanel({ weekData, selectedDay, profiles, wee
           {copied && <span style={{ fontSize: '12px', color: '#10b981' }}>Copied — paste it into Teams</span>}
           <div style={{ flex: 1 }} />
           <span style={{ fontSize: '11px', color: '#666' }}>
-            Teams shows **bold** but not tables, so this is plain text.
+            Teams shows bold and line breaks; tables aren't supported.
           </span>
         </div>
       </div>
+
+      {scope === 'day' && dayData && (
+        <div style={{ ...S.panel, marginTop: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: '10px' }}>
+            <label style={{ ...S.label, marginBottom: 0 }}>Send a group chat per job</label>
+            <div style={{ flex: 1 }} />
+            <span style={{ fontSize: '11px', color: '#4a5568' }}>Posts as you, from crew profile emails</span>
+          </div>
+
+          {!isConfigured() && (
+            <div style={{ fontSize: '12px', color: '#f59e0b', marginBottom: '10px' }}>
+              Sign-in isn't configured, so sending is unavailable. Copy/paste still works.
+            </div>
+          )}
+
+          {(dayData.jobs || []).filter(j => !(opts.skipCancelled && j.cancelled)).map(job => {
+            const { recipients, missing } = jobRecipients(job, profiles);
+            const key = jobKey(job);
+            const st = sendState[key] || {};
+            const canSend = isConfigured() && recipients.length > 0;
+            return (
+              <div key={key} style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', padding: '10px 0', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '13px', color: '#e2e8f0', fontWeight: 600 }}>
+                    {job.num}. {job.customer}
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#7eb8f7', marginTop: '2px' }}>
+                    {recipients.length
+                      ? `To: ${recipients.map(r => r.name).join(', ')}`
+                      : 'No crew member has a Teams email saved.'}
+                  </div>
+                  {missing.length > 0 && (
+                    <div style={{ fontSize: '11px', color: '#f59e0b', marginTop: '2px' }}>
+                      Missing email: {missing.map(m => m.name).join(', ')}
+                    </div>
+                  )}
+                  {st.note && (
+                    <div style={{ fontSize: '11px', color: st.status === 'error' ? '#ef4444' : '#10b981', marginTop: '4px' }}>
+                      {st.note}
+                      {st.url && <> · <a href={st.url} target="_blank" rel="noreferrer" style={{ color: '#4a9eff' }}>open chat</a></>}
+                    </div>
+                  )}
+                </div>
+                <button
+                  style={{ ...S.btn, whiteSpace: 'nowrap', opacity: canSend && st.status !== 'sending' ? 1 : 0.5, cursor: canSend && st.status !== 'sending' ? 'pointer' : 'not-allowed' }}
+                  disabled={!canSend || st.status === 'sending'}
+                  onClick={() => sendOneJob(job)}
+                >
+                  {st.status === 'sending' ? 'Sending…' : st.status === 'sent' ? 'Send again' : 'Send group chat'}
+                </button>
+              </div>
+            );
+          })}
+
+          <div style={{ fontSize: '11px', color: '#4a5568', marginTop: '10px' }}>
+            The first time you send, Teams will ask you to approve messaging permissions. Each send creates a new group chat.
+          </div>
+        </div>
+      )}
     </div>
   );
 }

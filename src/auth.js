@@ -76,3 +76,28 @@ export async function getToken() {
 export function isConfigured() {
   return CLIENT_ID !== 'YOUR_CLIENT_ID_HERE' && TENANT_ID !== 'YOUR_TENANT_ID_HERE';
 }
+
+// Acquire a token for a specific set of scopes (e.g. Teams messaging scopes
+// that aren't in the default loginRequest). Uses incremental consent: the
+// user is prompted the first time these scopes are requested, then silent.
+// Does not alter the default sign-in scopes above.
+export async function getTokenForScopes(scopes) {
+  if (!msalInstance) await initAuth();
+  if (!msalInstance) throw new Error('Auth not configured — update CLIENT_ID and TENANT_ID in src/auth.js');
+  const accounts = msalInstance.getAllAccounts();
+  if (accounts.length === 0) {
+    const r = await msalInstance.loginPopup({ scopes });
+    msalInstance.setActiveAccount(r.account);
+    return r.accessToken;
+  }
+  msalInstance.setActiveAccount(accounts[0]);
+  const request = { scopes, account: accounts[0] };
+  try {
+    const r = await msalInstance.acquireTokenSilent(request);
+    return r.accessToken;
+  } catch {
+    // Silent fails when the user hasn't yet consented to these scopes.
+    const r = await msalInstance.acquireTokenPopup(request);
+    return r.accessToken;
+  }
+}
