@@ -131,6 +131,36 @@ function isOvertimeStart(t){
   return m!=null&&(m<360||m>=840);
 }
 
+// ── New / starting jobs ──────────────────────────────────────
+// A job is "new" if its job number (poJob) did not appear on the
+// previous calendar day. These may need a fresh Teams group chat.
+// Jobs with no PO fall back to customer name as identity.
+function jobIdentity(job){
+  const po=job.poJob?String(job.poJob).trim():"";
+  return po?`po:${po.toLowerCase()}`:`cust:${String(job.customer||"").trim().toLowerCase()}`;
+}
+function prevDayName(dayName){
+  const i=DAY_ORDER.indexOf(dayName);
+  return i>0?DAY_ORDER[i-1]:null; // Sunday has no prior day in the week
+}
+function getNewJobIds(dayName,allData){
+  const today=allData?.[dayName];
+  if(!today?.jobs?.length) return new Set();
+  const prevName=prevDayName(dayName);
+  const prev=prevName?allData?.[prevName]:null;
+  // No prior day loaded (e.g. Sunday, or week boundary): can't compare,
+  // so don't mark anything new rather than marking everything new.
+  if(!prev?.jobs) return new Set();
+  const prevIds=new Set(prev.jobs.filter(j=>!j.cancelled).map(jobIdentity));
+  const result=new Set();
+  for(const job of today.jobs){
+    if(job.cancelled) continue;
+    if(!prevIds.has(jobIdentity(job))) result.add(`${job.num}::${jobIdentity(job)}`);
+  }
+  return result;
+}
+function isNewJob(job,newIds){ return newIds.has(`${job.num}::${jobIdentity(job)}`); }
+
 function getConflictsForDay(dayData){
   const jobs=(dayData?.jobs||[]).filter(j=>!j.cancelled);
   const personMap={};
@@ -149,13 +179,14 @@ function getConflictsForDay(dayData){
 }
 
 // ── Jobs Table ───────────────────────────────────────────────
-function JobsTable({dayData,flashedJobs}){
+function JobsTable({dayData,flashedJobs,allData}){
   const isMobile=useIsMobile();
   const [hlPerson,setHlPerson]=useState(null);
   const [query,setQuery]=useState("");
   useEffect(()=>{setHlPerson(null);},[dayData?.day]);
   if(!dayData?.jobs?.length) return <div style={{padding:"50px",textAlign:"center",color:"#444",fontStyle:"italic"}}>No jobs scheduled.</div>;
   const jobs=dayData.jobs;
+  const newIds=getNewJobIds(dayData.day,allData); // jobs whose # isn't on the prior day
   // Foremen come from today's parsed roster (bold names in the sheet), so renames just work
   const foremanKeys=Object.keys(dayData.crews||{});
   const foremanIdx=new Map(foremanKeys.map((f,i)=>[f,i]));
@@ -251,7 +282,7 @@ function JobsTable({dayData,flashedJobs}){
       )}
       {isMobile?(
         <>
-          <MobileJobCards orderedJobs={orderedJobs} otJobs={otJobs} regularJobs={regularJobs} cancelledJobs={cancelledJobs} dayData={dayData} multiCounts={multiCounts} hlPerson={hlPerson} togglePerson={togglePerson} isForeman={isForeman} colorOf={colorOf} flashedJobs={flashedJobs}/>
+          <MobileJobCards orderedJobs={orderedJobs} otJobs={otJobs} regularJobs={regularJobs} cancelledJobs={cancelledJobs} dayData={dayData} multiCounts={multiCounts} hlPerson={hlPerson} togglePerson={togglePerson} isForeman={isForeman} colorOf={colorOf} flashedJobs={flashedJobs} newIds={newIds}/>
           <div style={{marginTop:"10px",padding:"8px 12px",borderRadius:"6px",background:"rgba(255,255,255,0.02)",fontSize:"11px",color:"#7a8599",fontFamily:"'JetBrains Mono',monospace",display:"flex",gap:"12px",flexWrap:"wrap"}}>
             <span><b style={{color:"#e8a948"}}>{totalMen}</b> men</span>
             <span><b style={{color:"#e2e8f0"}}>{uniqueCrew}</b> unique</span>
@@ -277,6 +308,7 @@ function JobsTable({dayData,flashedJobs}){
             const isFlashed=flashedJobs?.has(`${dayData.day}-${job.num}`);
             const pmColor=PM_COLORS[(job.calledIn||'').toUpperCase()];
             const isOT=!isCancelled&&isOvertimeStart(job.onsiteTime);
+            const isNew=!isCancelled&&isNewJob(job,newIds);
             const firstOT=isOT&&otJobs.length>0&&job===otJobs[0]&&regularJobs.length>0;
             const firstCancelled=isCancelled&&job===cancelledJobs[0];
             const onHlJob=hlPerson?(job.crew||[]).includes(hlPerson):false;
@@ -301,6 +333,7 @@ function JobsTable({dayData,flashedJobs}){
                 <td style={{padding:"10px 8px",fontWeight:800,color:isCancelled?"#ef4444":isOT?"#facc15":"#4a9eff",fontFamily:"'JetBrains Mono',monospace",borderLeft:`3px solid ${isCancelled?"#ef4444":isOT?"#facc15":pmColor||"transparent"}`}}>{job.num}</td>
                 <td style={{padding:"10px 8px",fontWeight:700,color:isCancelled?"#f87171":"#e2e8f0",maxWidth:"150px",textDecoration:isCancelled?"line-through":"none"}}>
                   {job.customer}
+                  {isNew&&<span title="Job # not on the previous day — may need a new Teams chat" style={{marginLeft:"6px",fontSize:"8px",fontWeight:800,letterSpacing:"0.5px",padding:"1px 5px",borderRadius:"3px",background:"rgba(16,185,129,0.15)",color:"#10b981",border:"1px solid rgba(16,185,129,0.45)",textDecoration:"none",display:"inline-block",verticalAlign:"middle"}}>NEW</span>}
                   {isCancelled&&<span style={{marginLeft:"6px",fontSize:"8px",fontWeight:800,letterSpacing:"0.5px",padding:"1px 5px",borderRadius:"3px",background:"rgba(239,68,68,0.15)",color:"#ef4444",border:"1px solid rgba(239,68,68,0.4)",textDecoration:"none",display:"inline-block"}}>CANCELLED</span>}
                 </td>
                 <td style={{padding:"10px 8px",color:"#7a8599",fontFamily:"'JetBrains Mono',monospace",fontSize:"11px"}}>{job.poJob||"—"}</td>
@@ -362,12 +395,13 @@ function JobsTable({dayData,flashedJobs}){
 }
 
 // ── Mobile job cards (replaces the wide table on phones) ─────
-function MobileJobCards({orderedJobs,otJobs,regularJobs,cancelledJobs,dayData,multiCounts,hlPerson,togglePerson,isForeman,colorOf,flashedJobs}){
+function MobileJobCards({orderedJobs,otJobs,regularJobs,cancelledJobs,dayData,multiCounts,hlPerson,togglePerson,isForeman,colorOf,flashedJobs,newIds}){
   return(
     <div style={{display:"flex",flexDirection:"column",gap:"8px"}}>
       {orderedJobs.map((job,i)=>{
         const isCancelled=!!job.cancelled;
         const isOT=!isCancelled&&isOvertimeStart(job.onsiteTime);
+        const isNew=!isCancelled&&isNewJob(job,newIds);
         const firstOT=isOT&&otJobs.length>0&&job===otJobs[0]&&regularJobs.length>0;
         const firstCancelled=isCancelled&&cancelledJobs?.length>0&&job===cancelledJobs[0];
         const onHlJob=hlPerson?(job.crew||[]).includes(hlPerson):false;
@@ -387,6 +421,7 @@ function MobileJobCards({orderedJobs,otJobs,regularJobs,cancelledJobs,dayData,mu
                 <div style={{fontSize:"15px",fontWeight:800,color:isCancelled?"#f87171":"#e2e8f0",textDecoration:isCancelled?"line-through":"none"}}>
                   <span style={{color:isCancelled?"#ef4444":isOT?"#facc15":"#4a9eff",fontFamily:"'JetBrains Mono',monospace",marginRight:"7px"}}>#{job.num}</span>
                   {job.customer}
+                  {isNew&&<span style={{marginLeft:"6px",fontSize:"8px",fontWeight:800,letterSpacing:"0.5px",padding:"1px 5px",borderRadius:"3px",background:"rgba(16,185,129,0.15)",color:"#10b981",border:"1px solid rgba(16,185,129,0.45)",textDecoration:"none",display:"inline-block",verticalAlign:"middle"}}>NEW</span>}
                   {isCancelled&&<span style={{marginLeft:"6px",fontSize:"8px",fontWeight:800,letterSpacing:"0.5px",padding:"1px 5px",borderRadius:"3px",background:"rgba(239,68,68,0.15)",color:"#ef4444",border:"1px solid rgba(239,68,68,0.4)",textDecoration:"none",display:"inline-block",verticalAlign:"middle"}}>CANCELLED</span>}
                 </div>
                 <div style={{fontSize:"14px",fontWeight:800,color:isOT?"#facc15":"#e8a948",fontFamily:"'JetBrains Mono',monospace",whiteSpace:"nowrap"}}>
@@ -1360,9 +1395,11 @@ export default function App(){
                       </button>;
                     })}
                     {isMobile&&activeTab==="schedule"&&<span style={{marginLeft:"auto",paddingLeft:"8px",fontSize:"9px",color:"#3a4254",whiteSpace:"nowrap",flexShrink:0}}>← swipe →</span>}
+                    {!isMobile&&cur?.date&&<span style={{marginLeft:"auto",paddingLeft:"12px",fontSize:"13px",fontWeight:700,color:"#7a8599",whiteSpace:"nowrap",flexShrink:0}}>{new Date(cur.date+"T12:00:00").toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}</span>}
                   </div>
                 }
-                {activeTab==="schedule"&&<JobsTable dayData={cur} flashedJobs={flashedJobs}/>}
+                {activeTab==="schedule"&&isMobile&&cur?.date&&<div style={{fontSize:"12px",fontWeight:700,color:"#7a8599",marginBottom:"10px",marginTop:"-4px"}}>{new Date(cur.date+"T12:00:00").toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}</div>}
+                {activeTab==="schedule"&&<JobsTable dayData={cur} flashedJobs={flashedJobs} allData={data}/>}
                 {activeTab==="roster"&&<CrewRoster crews={cur?.crews} pools={cur?.pools} unavailable={cur?.unavailable} unassigned={cur?.unassigned} allData={data}/>}
                 {activeTab==="week"&&<WeekOverview data={data} selectedDay={selectedDay} onSelectDay={d=>{setSelectedDay(d);setActiveTab("schedule");}}/>}
                 {activeTab==="month"&&<MonthCalendar weeksCache={weeksCache} monthCursor={monthCursor} setMonthCursor={setMonthCursor} onPickDay={pickCalendarDay} mode={mode} requestWeek={fetchWeek} isMobile={isMobile}/>}
