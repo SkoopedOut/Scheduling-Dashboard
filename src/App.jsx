@@ -1215,14 +1215,10 @@ export default function App(){
     return()=>clearInterval(t);
   },[mode]);
 
-  // Auto-advance day at midnight
-  useEffect(()=>{
-    const t=setInterval(()=>{
-      const today=getTodayDayName();
-      if(selectedDay!==today&&activeTab==="schedule") setSelectedDay(today);
-    },60000);
-    return()=>clearInterval(t);
-  },[selectedDay,activeTab]);
+  // (Removed) The dashboard previously auto-switched the selected day to
+  // the real-world "today" every minute. That overrode a scheduler's
+  // manual day choice, so it's gone — the selected day now stays put until
+  // the user changes it. Initial default is still today (see useState above).
 
   // Prefetch the prior week so Monday's "new job" / "moved crew" checks can
   // compare against last week's Friday + Saturday. Runs whenever the viewed
