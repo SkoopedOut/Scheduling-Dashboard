@@ -131,27 +131,50 @@ function isOvertimeStart(t){
   return m!=null&&(m<360||m>=840);
 }
 
-// ── New / starting jobs ──────────────────────────────────────
-// A job is "new" if its job number (poJob) did not appear on the
-// previous calendar day. These may need a fresh Teams group chat.
-// Jobs with no PO fall back to customer name as identity.
+// ── New jobs & crew moves (with cross-week Monday logic) ─────
+// A job is "new" if its job # didn't appear on the comparison day.
+// A person "moved" if they're on a job # they weren't on that day.
+//
+// The comparison day is normally yesterday. But on MONDAY, yesterday
+// is (usually empty) Sunday, and a job may actually have started on the
+// prior Saturday, or be an ongoing weekday-only job last seen Friday.
+// So on Monday we compare against the PRIOR WEEK's Friday + Saturday
+// combined. This needs the previous week loaded in the cache.
 function jobIdentity(job){
   const po=job.poJob?String(job.poJob).trim():"";
   return po?`po:${po.toLowerCase()}`:`cust:${String(job.customer||"").trim().toLowerCase()}`;
 }
-function prevDayName(dayName){
-  const i=DAY_ORDER.indexOf(dayName);
-  return i>0?DAY_ORDER[i-1]:null; // Sunday has no prior day in the week
+function prevWeekSatKey(satKey){
+  if(!satKey) return null;
+  const d=new Date(satKey+'T12:00:00');
+  d.setDate(d.getDate()-7);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
-function getNewJobIds(dayName,allData){
-  const today=allData?.[dayName];
+// Returns the array of jobs to compare "today" against, or null if the
+// needed data isn't loaded (so callers can skip rather than false-flag).
+function getCompareJobs(dayName,weeksCache,curSatKey){
+  const cur=weeksCache?.[curSatKey]||{};
+  const i=DAY_ORDER.indexOf(dayName);
+  if(i<0) return null;
+  if(dayName==="Monday"){
+    // Prior week's Friday + Saturday combined.
+    const prevSat=prevWeekSatKey(curSatKey);
+    const pw=weeksCache?.[prevSat];
+    if(!pw) return null; // prior week not loaded yet
+    const fri=pw.Friday?.jobs||[];
+    const sat=pw.Saturday?.jobs||[];
+    return [...fri,...sat];
+  }
+  if(i===0) return null; // Sunday: no in-week prior day
+  const prev=cur[DAY_ORDER[i-1]];
+  return prev?.jobs||null;
+}
+function getNewJobIds(dayName,weeksCache,curSatKey){
+  const today=weeksCache?.[curSatKey]?.[dayName];
   if(!today?.jobs?.length) return new Set();
-  const prevName=prevDayName(dayName);
-  const prev=prevName?allData?.[prevName]:null;
-  // No prior day loaded (e.g. Sunday, or week boundary): can't compare,
-  // so don't mark anything new rather than marking everything new.
-  if(!prev?.jobs) return new Set();
-  const prevIds=new Set(prev.jobs.filter(j=>!j.cancelled).map(jobIdentity));
+  const compare=getCompareJobs(dayName,weeksCache,curSatKey);
+  if(!compare) return new Set(); // can't compare -> mark nothing
+  const prevIds=new Set(compare.filter(j=>!j.cancelled).map(jobIdentity));
   const result=new Set();
   for(const job of today.jobs){
     if(job.cancelled) continue;
@@ -160,6 +183,39 @@ function getNewJobIds(dayName,allData){
   return result;
 }
 function isNewJob(job,newIds){ return newIds.has(`${job.num}::${jobIdentity(job)}`); }
+
+// Map: person name -> set of job identities they were on, for a job list.
+function personJobMap(jobs){
+  const m={};
+  for(const job of (jobs||[])){
+    if(job.cancelled) continue;
+    const id=jobIdentity(job);
+    for(const name of (job.crew||[])){
+      if(isNonPerson(name)) continue;
+      (m[name]||=new Set()).add(id);
+    }
+  }
+  return m;
+}
+// Returns Map: personName -> true if they're on any job today they were
+// NOT on during the comparison day (i.e. moved/newly-assigned).
+function getMovedCrew(dayName,weeksCache,curSatKey){
+  const today=weeksCache?.[curSatKey]?.[dayName];
+  const moved=new Map();
+  if(!today?.jobs?.length) return moved;
+  const compare=getCompareJobs(dayName,weeksCache,curSatKey);
+  if(!compare) return moved; // can't compare -> flag nobody
+  const prevMap=personJobMap(compare);
+  const todayMap=personJobMap(today.jobs);
+  for(const [name,todayIds] of Object.entries(todayMap)){
+    const prevIds=prevMap[name]||new Set();
+    // Moved if any of today's job #s isn't one they were on the compare day.
+    for(const id of todayIds){
+      if(!prevIds.has(id)){ moved.set(name,true); break; }
+    }
+  }
+  return moved;
+}
 
 function getConflictsForDay(dayData){
   const jobs=(dayData?.jobs||[]).filter(j=>!j.cancelled);
@@ -179,14 +235,15 @@ function getConflictsForDay(dayData){
 }
 
 // ── Jobs Table ───────────────────────────────────────────────
-function JobsTable({dayData,flashedJobs,allData}){
+function JobsTable({dayData,flashedJobs,weeksCache,curSatKey}){
   const isMobile=useIsMobile();
   const [hlPerson,setHlPerson]=useState(null);
   const [query,setQuery]=useState("");
   useEffect(()=>{setHlPerson(null);},[dayData?.day]);
   if(!dayData?.jobs?.length) return <div style={{padding:"50px",textAlign:"center",color:"#444",fontStyle:"italic"}}>No jobs scheduled.</div>;
   const jobs=dayData.jobs;
-  const newIds=getNewJobIds(dayData.day,allData); // jobs whose # isn't on the prior day
+  const newIds=getNewJobIds(dayData.day,weeksCache,curSatKey); // jobs whose # isn't on the compare day
+  const movedCrew=getMovedCrew(dayData.day,weeksCache,curSatKey); // people newly on a job vs compare day
   // Foremen come from today's parsed roster (bold names in the sheet), so renames just work
   const foremanKeys=Object.keys(dayData.crews||{});
   const foremanIdx=new Map(foremanKeys.map((f,i)=>[f,i]));
@@ -282,7 +339,7 @@ function JobsTable({dayData,flashedJobs,allData}){
       )}
       {isMobile?(
         <>
-          <MobileJobCards orderedJobs={orderedJobs} otJobs={otJobs} regularJobs={regularJobs} cancelledJobs={cancelledJobs} dayData={dayData} multiCounts={multiCounts} hlPerson={hlPerson} togglePerson={togglePerson} isForeman={isForeman} colorOf={colorOf} flashedJobs={flashedJobs} newIds={newIds}/>
+          <MobileJobCards orderedJobs={orderedJobs} otJobs={otJobs} regularJobs={regularJobs} cancelledJobs={cancelledJobs} dayData={dayData} multiCounts={multiCounts} hlPerson={hlPerson} togglePerson={togglePerson} isForeman={isForeman} colorOf={colorOf} flashedJobs={flashedJobs} newIds={newIds} movedCrew={movedCrew}/>
           <div style={{marginTop:"10px",padding:"8px 12px",borderRadius:"6px",background:"rgba(255,255,255,0.02)",fontSize:"11px",color:"#7a8599",fontFamily:"'JetBrains Mono',monospace",display:"flex",gap:"12px",flexWrap:"wrap"}}>
             <span><b style={{color:"#e8a948"}}>{totalMen}</b> men</span>
             <span><b style={{color:"#e2e8f0"}}>{uniqueCrew}</b> unique</span>
@@ -357,14 +414,15 @@ function JobsTable({dayData,flashedJobs,allData}){
                         const isHl=hlPerson===n;
                         const isStop=isStopLabel(n);
                         const isDrv=isDriverTag(n);
+                        const hasMoved=movedCrew.has(n);
                         if(isStop) return <span key={j} style={{fontSize:"9px",fontWeight:700,letterSpacing:"0.5px",color:"#2d3748",padding:"1px 5px",borderRadius:"3px",background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)"}}>{n.toUpperCase()}</span>;
                         if(isDrv) return <span key={j} style={{display:"inline-block",padding:"2px 7px",borderRadius:"4px",fontSize:"11px",background:"rgba(139,92,246,0.08)",color:"#8b5cf6",fontWeight:500,border:"1px solid rgba(139,92,246,0.2)"}} title="Driver">{n}</span>;
                         const chip=<span style={{display:"inline-block",padding:"2px 7px",borderRadius:"4px",fontSize:"11px",
-                          background:isHl?"rgba(56,189,248,0.2)":isF?`${fc}18`:"rgba(255,255,255,0.05)",
-                          color:isF?fc:"#9ca3af",
-                          fontWeight:isF?700:400,
-                          border:isHl?"1px solid rgba(56,189,248,0.7)":multiCount?"1px solid rgba(56,189,248,0.45)":isF?`1px solid ${fc}35`:"1px solid transparent"
-                        }}>{n}{multiCount&&<span style={{marginLeft:"4px",fontSize:"9px",fontWeight:800,color:"#38bdf8"}}>×{multiCount}</span>}</span>;
+                          background:isHl?"rgba(56,189,248,0.2)":hasMoved?"rgba(16,185,129,0.12)":isF?`${fc}18`:"rgba(255,255,255,0.05)",
+                          color:isF?fc:hasMoved?"#34d399":"#9ca3af",
+                          fontWeight:isF?700:hasMoved?600:400,
+                          border:isHl?"1px solid rgba(56,189,248,0.7)":hasMoved?"1px solid rgba(16,185,129,0.5)":multiCount?"1px solid rgba(56,189,248,0.45)":isF?`1px solid ${fc}35`:"1px solid transparent"
+                        }} title={hasMoved?"Moved to a different job vs the day before":undefined}>{hasMoved&&<span style={{marginRight:"3px",fontSize:"9px",color:"#10b981"}}>➜</span>}{n}{multiCount&&<span style={{marginLeft:"4px",fontSize:"9px",fontWeight:800,color:"#38bdf8"}}>×{multiCount}</span>}</span>;
                         if(multiCount) return <button key={j} onClick={()=>togglePerson(n)} title={isHl?"Click to clear highlight":`On ${multiCount} jobs today — click to highlight them`} style={{background:"transparent",border:"none",padding:0,cursor:"pointer",fontFamily:"inherit"}}>{chip}</button>;
                         return <Fragment key={j}>{chip}</Fragment>;
                       })}
@@ -395,7 +453,7 @@ function JobsTable({dayData,flashedJobs,allData}){
 }
 
 // ── Mobile job cards (replaces the wide table on phones) ─────
-function MobileJobCards({orderedJobs,otJobs,regularJobs,cancelledJobs,dayData,multiCounts,hlPerson,togglePerson,isForeman,colorOf,flashedJobs,newIds}){
+function MobileJobCards({orderedJobs,otJobs,regularJobs,cancelledJobs,dayData,multiCounts,hlPerson,togglePerson,isForeman,colorOf,flashedJobs,newIds,movedCrew}){
   return(
     <div style={{display:"flex",flexDirection:"column",gap:"8px"}}>
       {orderedJobs.map((job,i)=>{
@@ -443,11 +501,12 @@ function MobileJobCards({orderedJobs,otJobs,regularJobs,cancelledJobs,dayData,mu
                     if(isDriverTag(n)) return <span key={j} style={{padding:"3px 8px",borderRadius:"4px",fontSize:"12px",background:"rgba(139,92,246,0.08)",color:"#8b5cf6",border:"1px solid rgba(139,92,246,0.2)"}}>{n}</span>;
                     const isF=isForeman(n); const fc=isF?colorOf(n):null;
                     const mc=multiCounts.get(n); const isHl=hlPerson===n;
+                    const hasMoved=movedCrew?.has(n);
                     const chip=<span style={{display:"inline-block",padding:"3px 9px",borderRadius:"5px",fontSize:"12px",
-                      background:isHl?"rgba(56,189,248,0.2)":isF?`${fc}18`:"rgba(255,255,255,0.05)",
-                      color:isF?fc:"#9ca3af",fontWeight:isF?700:400,
-                      border:isHl?"1px solid rgba(56,189,248,0.7)":mc?"1px solid rgba(56,189,248,0.45)":isF?`1px solid ${fc}35`:"1px solid transparent"}}>
-                      {n}{mc&&<span style={{marginLeft:"4px",fontSize:"10px",fontWeight:800,color:"#38bdf8"}}>×{mc}</span>}</span>;
+                      background:isHl?"rgba(56,189,248,0.2)":hasMoved?"rgba(16,185,129,0.12)":isF?`${fc}18`:"rgba(255,255,255,0.05)",
+                      color:isF?fc:hasMoved?"#34d399":"#9ca3af",fontWeight:isF?700:hasMoved?600:400,
+                      border:isHl?"1px solid rgba(56,189,248,0.7)":hasMoved?"1px solid rgba(16,185,129,0.5)":mc?"1px solid rgba(56,189,248,0.45)":isF?`1px solid ${fc}35`:"1px solid transparent"}}>
+                      {hasMoved&&<span style={{marginRight:"3px",fontSize:"10px",color:"#10b981"}}>➜</span>}{n}{mc&&<span style={{marginLeft:"4px",fontSize:"10px",fontWeight:800,color:"#38bdf8"}}>×{mc}</span>}</span>;
                     return mc?<button key={j} onClick={()=>togglePerson(n)} style={{background:"transparent",border:"none",padding:0,cursor:"pointer",fontFamily:"inherit"}}>{chip}</button>:<Fragment key={j}>{chip}</Fragment>;
                   })}
                 </div>
@@ -1165,6 +1224,15 @@ export default function App(){
     return()=>clearInterval(t);
   },[selectedDay,activeTab]);
 
+  // Prefetch the prior week so Monday's "new job" / "moved crew" checks can
+  // compare against last week's Friday + Saturday. Runs whenever the viewed
+  // week changes in live mode; fetchWeek no-ops if it's already cached.
+  useEffect(()=>{
+    if(mode!=="live") return;
+    const prevSat=prevWeekSatKey(currentWeekSat);
+    if(prevSat&&!weeksCache[prevSat]) fetchWeek(prevSat,{once:true});
+  },[mode,currentWeekSat]);
+
   async function refreshData(){
     const satKey=currentWeekSatRef.current;
     try {
@@ -1399,7 +1467,7 @@ export default function App(){
                   </div>
                 }
                 {activeTab==="schedule"&&isMobile&&cur?.date&&<div style={{fontSize:"12px",fontWeight:700,color:"#7a8599",marginBottom:"10px",marginTop:"-4px"}}>{new Date(cur.date+"T12:00:00").toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}</div>}
-                {activeTab==="schedule"&&<JobsTable dayData={cur} flashedJobs={flashedJobs} allData={data}/>}
+                {activeTab==="schedule"&&<JobsTable dayData={cur} flashedJobs={flashedJobs} weeksCache={weeksCache} curSatKey={currentWeekSat}/>}
                 {activeTab==="roster"&&<CrewRoster crews={cur?.crews} pools={cur?.pools} unavailable={cur?.unavailable} unassigned={cur?.unassigned} allData={data}/>}
                 {activeTab==="week"&&<WeekOverview data={data} selectedDay={selectedDay} onSelectDay={d=>{setSelectedDay(d);setActiveTab("schedule");}}/>}
                 {activeTab==="month"&&<MonthCalendar weeksCache={weeksCache} monthCursor={monthCursor} setMonthCursor={setMonthCursor} onPickDay={pickCalendarDay} mode={mode} requestWeek={fetchWeek} isMobile={isMobile}/>}
