@@ -57,11 +57,15 @@ function PMBadge({initials}){
   return <span style={{display:"inline-block",fontSize:"10px",fontWeight:700,padding:"2px 8px",borderRadius:"4px",background:PM_COLORS[initials.toUpperCase()]||"#555",color:"#fff"}}>{initials.toUpperCase()}</span>;
 }
 
+// Column N "Job folder": y = folder needed (not yet done), SM = done by
+// Stephanie MacFarland, n = not needed, blank = unmarked. Note "y" is an
+// OUTSTANDING task, not a completed one — it must read as action-needed.
 function FolderIcon({val}){
-  if(val==="sm") return <span style={{fontSize:"10px",fontWeight:700,color:"#a78bfa"}}>SM</span>;
-  if(val==="y") return <span style={{color:"#10b981",fontSize:"14px"}}>✓</span>;
-  if(val==="n") return <span style={{color:"#ef4444",fontSize:"14px"}}>✗</span>;
-  return <span style={{color:"#444"}}>—</span>;
+  const v=(val||"").toLowerCase();
+  if(v==="sm") return <span title="Folder done by Stephanie MacFarland" style={{fontSize:"10px",fontWeight:800,color:"#10b981",padding:"1px 5px",borderRadius:"3px",background:"rgba(16,185,129,0.15)",border:"1px solid rgba(16,185,129,0.45)"}}>SM ✓</span>;
+  if(v==="y") return <span title="Needs a folder — not done yet" style={{fontSize:"9px",fontWeight:800,letterSpacing:"0.3px",color:"#f59e0b",padding:"1px 5px",borderRadius:"3px",background:"rgba(245,158,11,0.15)",border:"1px solid rgba(245,158,11,0.5)"}}>NEEDS</span>;
+  if(v==="n") return <span title="No folder needed" style={{color:"#5a6474",fontSize:"12px"}}>—</span>;
+  return <span title="Not marked" style={{color:"#3a4254"}}>·</span>;
 }
 
 // ── Connection Bar ───────────────────────────────────────────
@@ -276,6 +280,9 @@ function JobsTable({dayData,flashedJobs,weeksCache,curSatKey}){
   const totalMen=activeAll.reduce((s,j)=>s+(j.numMen||0),0);
   const uniqueCrew=new Set(activeAll.flatMap(j=>(j.crew||[]).filter(n=>!isNonPerson(n)))).size;
   const totalTrucks=activeAll.filter(j=>j.trucks&&!/^(na|n\/a)$/i.test(j.trucks.trim())).length;
+  // Folder status counts (column N): "y"=needed, "sm"=done by Stephanie.
+  const foldersNeeded=activeAll.filter(j=>(j.jobFolder||"")==="y").length;
+  const foldersDone=activeAll.filter(j=>(j.jobFolder||"")==="sm").length;
   return(
     <div>
       {/* Search / filter */}
@@ -347,6 +354,8 @@ function JobsTable({dayData,flashedJobs,weeksCache,curSatKey}){
             {otJobs.length>0&&<span><b style={{color:"#facc15"}}>{otJobs.length}</b> OT</span>}
             {cancelledJobs.length>0&&<span><b style={{color:"#ef4444"}}>{cancelledJobs.length}</b> cancelled</span>}
             <span><b style={{color:"#10b981"}}>{totalTrucks}</b> w/ truck</span>
+            {foldersNeeded>0&&<span><b style={{color:"#f59e0b"}}>{foldersNeeded}</b> folder{foldersNeeded===1?"":"s"} needed</span>}
+            {foldersDone>0&&<span><b style={{color:"#10b981"}}>{foldersDone}</b> folder{foldersDone===1?"":"s"} done</span>}
           </div>
         </>
       ):(
@@ -440,7 +449,7 @@ function JobsTable({dayData,flashedJobs,weeksCache,curSatKey}){
               <td colSpan={6} style={{padding:"8px 8px",fontSize:"9px",fontWeight:800,letterSpacing:"1.2px",color:"#4a5568",textTransform:"uppercase"}}>Totals</td>
               <td style={{padding:"8px",fontWeight:800,textAlign:"center",fontSize:"16px",color:"#e8a948"}}>{totalMen}</td>
               <td style={{padding:"8px",fontSize:"11px",color:"#7a8599",fontFamily:"'JetBrains Mono',monospace"}}>
-                <span style={{color:"#e2e8f0",fontWeight:600}}>{uniqueCrew}</span> unique · <span style={{color:"#e2e8f0",fontWeight:600}}>{activeAll.length}</span> jobs{otJobs.length>0&&<> · <span style={{color:"#facc15",fontWeight:600}}>{otJobs.length}</span> OT</>}{cancelledJobs.length>0&&<> · <span style={{color:"#ef4444",fontWeight:600}}>{cancelledJobs.length}</span> cancelled</>} · <span style={{color:"#10b981",fontWeight:600}}>{totalTrucks}</span> w/ truck
+                <span style={{color:"#e2e8f0",fontWeight:600}}>{uniqueCrew}</span> unique · <span style={{color:"#e2e8f0",fontWeight:600}}>{activeAll.length}</span> jobs{otJobs.length>0&&<> · <span style={{color:"#facc15",fontWeight:600}}>{otJobs.length}</span> OT</>}{cancelledJobs.length>0&&<> · <span style={{color:"#ef4444",fontWeight:600}}>{cancelledJobs.length}</span> cancelled</>} · <span style={{color:"#10b981",fontWeight:600}}>{totalTrucks}</span> w/ truck{foldersNeeded>0&&<> · <span style={{color:"#f59e0b",fontWeight:600}}>{foldersNeeded}</span> folder{foldersNeeded===1?"":"s"} needed</>}{foldersDone>0&&<> · <span style={{color:"#10b981",fontWeight:600}}>{foldersDone}</span> done</>}
               </td>
               <td colSpan={2}/>
             </tr>
@@ -492,7 +501,8 @@ function MobileJobCards({orderedJobs,otJobs,regularJobs,cancelledJobs,dayData,mu
                 {job.poJob&&<span>PO {job.poJob}</span>}
                 {job.trucks&&<span>🚚 {job.trucks}</span>}
                 {job.numMen!=null&&<span style={{color:"#f472b6",fontWeight:700}}>{job.numMen} men</span>}
-                <span style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:"6px"}}><PMBadge initials={job.calledIn}/><FolderIcon val={job.jobFolder}/></span>
+                {job.jobFolder&&<span style={{display:"inline-flex",alignItems:"center",gap:"4px"}}><span style={{fontSize:"10px",color:"#4a5568"}}>Folder</span><FolderIcon val={job.jobFolder}/></span>}
+                <span style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:"6px"}}><PMBadge initials={job.calledIn}/>{!job.jobFolder&&<FolderIcon val={job.jobFolder}/>}</span>
               </div>
               {(job.crew||[]).length>0&&(
                 <div style={{display:"flex",flexWrap:"wrap",gap:"4px",marginTop:"8px"}}>
