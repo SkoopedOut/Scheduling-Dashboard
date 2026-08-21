@@ -63,6 +63,7 @@ function PMBadge({initials}){
 function FolderIcon({val}){
   const v=(val||"").toLowerCase();
   if(v==="sm") return <span title="Folder done by Stephanie MacFarland" style={{fontSize:"10px",fontWeight:800,color:"#10b981",padding:"1px 5px",borderRadius:"3px",background:"rgba(16,185,129,0.15)",border:"1px solid rgba(16,185,129,0.45)"}}>SM ✓</span>;
+  if(v==="sm-half") return <span title="Partially done by Stephanie MacFarland" style={{fontSize:"10px",fontWeight:800,color:"#38bdf8",padding:"1px 5px",borderRadius:"3px",background:"rgba(56,189,248,0.15)",border:"1px solid rgba(56,189,248,0.45)"}}>SM ½</span>;
   if(v==="y") return <span title="Needs a folder — not done yet" style={{fontSize:"9px",fontWeight:800,letterSpacing:"0.3px",color:"#f59e0b",padding:"1px 5px",borderRadius:"3px",background:"rgba(245,158,11,0.15)",border:"1px solid rgba(245,158,11,0.5)"}}>NEEDS</span>;
   if(v==="n") return <span title="No folder needed" style={{color:"#5a6474",fontSize:"12px"}}>—</span>;
   return <span title="Not marked" style={{color:"#3a4254"}}>·</span>;
@@ -280,9 +281,9 @@ function JobsTable({dayData,flashedJobs,weeksCache,curSatKey}){
   const totalMen=activeAll.reduce((s,j)=>s+(j.numMen||0),0);
   const uniqueCrew=new Set(activeAll.flatMap(j=>(j.crew||[]).filter(n=>!isNonPerson(n)))).size;
   const totalTrucks=activeAll.filter(j=>j.trucks&&!/^(na|n\/a)$/i.test(j.trucks.trim())).length;
-  // Folder status counts (column N): "y"=needed, "sm"=done by Stephanie.
+  // Folder status counts (column N): "y"=needed, "sm"/"sm-half"=done by Stephanie.
   const foldersNeeded=activeAll.filter(j=>(j.jobFolder||"")==="y").length;
-  const foldersDone=activeAll.filter(j=>(j.jobFolder||"")==="sm").length;
+  const foldersDone=activeAll.filter(j=>{const v=j.jobFolder||"";return v==="sm"||v==="sm-half";}).length;
   return(
     <div>
       {/* Search / filter */}

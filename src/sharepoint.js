@@ -402,7 +402,6 @@ function parseDaySheet(sheet, dayName, styleSheet) {
     const trucks = cellVal(sheet, `F${row}`);
     const numMenRaw = cellVal(sheet, `G${row}`);
     const calledIn = cellVal(sheet, `M${row}`);
-    const jobFolder = cellVal(sheet, `N${row}`);
 
     const numMen = typeof numMenRaw === 'number' ? numMenRaw
       : (typeof numMenRaw === 'string' && /^\d+$/.test(numMenRaw.trim()) ? parseInt(numMenRaw.trim(), 10) : null);
@@ -419,6 +418,23 @@ function parseDaySheet(sheet, dayName, styleSheet) {
       }
     }
 
+    // Job folder (column N): the "y" (needed) sits on the job row, but the
+    // "SM" (done by Stephanie) is usually written in the row directly BELOW
+    // it, within the job's two-row block. So scan the whole block and let a
+    // done/partial marker override the plain "needed" flag.
+    //   y / Y      -> 'y'       (folder needed, not done)
+    //   SM         -> 'sm'      (done)
+    //   SM Half    -> 'sm-half' (partially done)
+    //   n / N      -> 'n'       (not needed)
+    let jobFolder = null;
+    for (let r = row; r <= crewEnd; r++) {
+      const raw = cellVal(sheet, `N${r}`);
+      if (raw == null || !String(raw).trim()) continue;
+      const v = String(raw).trim().toLowerCase();
+      if (v.startsWith('sm')) { jobFolder = v.includes('half') ? 'sm-half' : 'sm'; break; }
+      if (v === 'y' || v === 'n') { if (jobFolder == null) jobFolder = v; }
+    }
+
     jobs.push({
       num,
       customer: typeof customer === 'string' ? customer.trim() : String(customer),
@@ -429,7 +445,7 @@ function parseDaySheet(sheet, dayName, styleSheet) {
       numMen,
       crew,
       calledIn: calledIn != null ? String(calledIn).trim() : null,
-      jobFolder: jobFolder != null ? String(jobFolder).trim().toLowerCase() : null,
+      jobFolder,
       cancelled: jobRowCancelled(styleSheet, row),
     });
   }
