@@ -111,8 +111,33 @@ function ConnectionBar({mode,lastRefresh,nextRefresh,isConnected,onConnect,onRef
 
 // ── Operational Helpers ──────────────────────────────────────
 function isStopLabel(name){ return /^stop\s*\d+$/i.test(String(name).trim()); }
-function isDriverTag(name){ return /-[tvTV]$/.test(String(name).trim()); }
-function isNonPerson(name){ return isStopLabel(name)||isDriverTag(name); }
+// Placeholder / code tokens that appear in a crew column but aren't people.
+// IOI recurs as the lone "crew" on certain jobs — a job-type marker, not a name.
+function isPlaceholderToken(name){ return /^(ioi|tbd|open|n\/?a|xxx+)$/i.test(String(name).trim()); }
+// A trailing driving qualifier: "-T", "-t", " -V", "-v" etc. This is a
+// qualifier ON a real person's name (e.g. "Rich-t" = Rich, who's driving),
+// NOT a marker that the token isn't a person.
+const DRIVER_SUFFIX=/\s*-\s*[tvTV]\s*$/;
+function hasDriverTag(name){ return DRIVER_SUFFIX.test(String(name).trim()); }
+// Strip the driver suffix and any trailing "(1)" trip-count to get the
+// name as it appears on the roster. "Rich -T" -> "Rich", "Pat-T (2)" -> "Pat".
+function canonicalName(name){
+  return String(name).trim()
+    .replace(/\s*\(\s*\d+\s*\)\s*$/,"")   // trailing trip count "(2)"
+    .replace(DRIVER_SUFFIX,"")             // trailing driver qualifier
+    .trim();
+}
+// True only for tokens that are NOT people at all: stop labels, or a bare
+// qualifier with no name in front of it. "Rich-t" is a person and returns false.
+function isDriverTag(name){ return /^-\s*[tvTV]$/.test(String(name).trim()); }
+function isNonPerson(name){
+  const s=String(name).trim();
+  if(isStopLabel(s)) return true;
+  if(isDriverTag(s)) return true;            // bare "-T"
+  if(isPlaceholderToken(s)) return true;     // IOI, TBD, etc.
+  if(canonicalName(s)==="") return true;     // nothing left after stripping
+  return false;
+}
 
 // Parse onsite times like "6am", "6:30am", "2pm", "14:00" into minutes-after-midnight
 function parseTimeToMinutes(t){
@@ -197,7 +222,8 @@ function personJobMap(jobs){
     const id=jobIdentity(job);
     for(const name of (job.crew||[])){
       if(isNonPerson(name)) continue;
-      (m[name]||=new Set()).add(id);
+      const cn=canonicalName(name); // fold "Rich-t" into "Rich"
+      (m[cn]||=new Set()).add(id);
     }
   }
   return m;
@@ -222,21 +248,36 @@ function getMovedCrew(dayName,weeksCache,curSatKey){
   return moved;
 }
 
+// A person counts as "×2" only when assigned to two DIFFERENT jobs in the
+// SAME time slot (both AM/regular, or both OT). Doing OT on the same job
+// after regular time is NOT ×2, and an AM job plus an unrelated OT job is
+// two different slots, so also not ×2 — the person can physically do both.
+function jobSlot(job){ return isOvertimeStart(job.onsiteTime)?"ot":"am"; }
 function getConflictsForDay(dayData){
   const jobs=(dayData?.jobs||[]).filter(j=>!j.cancelled);
+  // name -> slot -> Map(jobKey -> job)
   const personMap={};
   for(const job of jobs){
-    for(const name of (job.crew||[])){
-      if(isNonPerson(name)) continue; // skip stop labels and driver tags
-      if(!personMap[name]) personMap[name]=new Map();
-      // Same poJob = same job (regular + OT), don't count as conflict
-      const key=job.poJob?String(job.poJob):`__num_${job.num}`;
-      if(!personMap[name].has(key)) personMap[name].set(key,job);
+    const slot=jobSlot(job);
+    const key=job.poJob?String(job.poJob):`__num_${job.num}`;
+    for(const rawName of (job.crew||[])){
+      if(isNonPerson(rawName)) continue; // skip stop labels and driver tags
+      const name=canonicalName(rawName); // fold "Rich-t" into "Rich"
+      if(!personMap[name]) personMap[name]={am:new Map(),ot:new Map()};
+      if(!personMap[name][slot].has(key)) personMap[name][slot].set(key,job);
     }
   }
-  return Object.entries(personMap)
-    .filter(([,map])=>map.size>1)
-    .map(([name,map])=>({name,jobs:Array.from(map.values())}));
+  // Flag if EITHER slot has more than one distinct job. The ×N shown is the
+  // largest single-slot job count (two AM jobs = ×2).
+  const out=[];
+  for(const [name,slots] of Object.entries(personMap)){
+    const maxSlot=Math.max(slots.am.size,slots.ot.size);
+    if(maxSlot>1){
+      const jobsInBusiestSlot=slots.am.size>=slots.ot.size?slots.am:slots.ot;
+      out.push({name,count:maxSlot,jobs:Array.from(jobsInBusiestSlot.values())});
+    }
+  }
+  return out;
 }
 
 // ── Jobs Table ───────────────────────────────────────────────
@@ -256,7 +297,7 @@ function JobsTable({dayData,flashedJobs,weeksCache,curSatKey}){
   const colorOf=n=>foremanColor(n,foremanIdx.has(n)?foremanIdx.get(n):FOREMAN_ORDER.indexOf(n));
   const togglePerson=n=>setHlPerson(p=>p===n?null:n);
   const multiJobs=getConflictsForDay(dayData); // people on more than one job today (informational, not a conflict)
-  const multiCounts=new Map(multiJobs.map(c=>[c.name,c.jobs.length]));
+  const multiCounts=new Map(multiJobs.map(c=>[c.name,c.count]));
   // Search filter: matches customer, location, PO, PM, or any crew name
   const q=query.trim().toLowerCase();
   const matchesQuery=j=>!q||[j.customer,j.location,j.poJob,j.calledIn,...(j.crew||[])]
@@ -378,7 +419,7 @@ function JobsTable({dayData,flashedJobs,weeksCache,curSatKey}){
             const isNew=!isCancelled&&isNewJob(job,newIds);
             const firstOT=isOT&&otJobs.length>0&&job===otJobs[0]&&regularJobs.length>0;
             const firstCancelled=isCancelled&&job===cancelledJobs[0];
-            const onHlJob=hlPerson?(job.crew||[]).includes(hlPerson):false;
+            const onHlJob=hlPerson?(job.crew||[]).some(c=>canonicalName(c).toLowerCase()===hlPerson.toLowerCase()):false;
             const rowBg=isCancelled?"rgba(239,68,68,0.06)":onHlJob?"rgba(56,189,248,0.10)":isOT?"rgba(250,204,21,0.09)":noCrewFlag?"rgba(245,158,11,0.05)":i%2?"rgba(255,255,255,0.012)":"transparent";
             const hoverBg=isCancelled?"rgba(239,68,68,0.10)":onHlJob?"rgba(56,189,248,0.16)":isOT?"rgba(250,204,21,0.16)":"rgba(74,158,255,0.04)";
             const rowOpacity=isCancelled?0.75:hlPerson&&!onHlJob?0.3:1;
@@ -419,21 +460,21 @@ function JobsTable({dayData,flashedJobs,weeksCache,curSatKey}){
                     ?<span style={{color:"#4a5568",fontStyle:"italic",fontSize:"11px"}}>— none assigned —</span>
                     :<div style={{display:"flex",flexWrap:"wrap",gap:"3px",alignItems:"center"}}>
                       {(job.crew||[]).map((n,j)=>{
-                        const isF=isForeman(n); const fc=isF?colorOf(n):null;
-                        const multiCount=multiCounts.get(n);
-                        const isHl=hlPerson===n;
-                        const isStop=isStopLabel(n);
-                        const isDrv=isDriverTag(n);
-                        const hasMoved=movedCrew.has(n);
-                        if(isStop) return <span key={j} style={{fontSize:"9px",fontWeight:700,letterSpacing:"0.5px",color:"#2d3748",padding:"1px 5px",borderRadius:"3px",background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)"}}>{n.toUpperCase()}</span>;
-                        if(isDrv) return <span key={j} style={{display:"inline-block",padding:"2px 7px",borderRadius:"4px",fontSize:"11px",background:"rgba(139,92,246,0.08)",color:"#8b5cf6",fontWeight:500,border:"1px solid rgba(139,92,246,0.2)"}} title="Driver">{n}</span>;
+                        if(isStopLabel(n)) return <span key={j} style={{fontSize:"9px",fontWeight:700,letterSpacing:"0.5px",color:"#2d3748",padding:"1px 5px",borderRadius:"3px",background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)"}}>{n.toUpperCase()}</span>;
+                        if(isDriverTag(n)) return null; // bare "-T" with no name: skip
+                        const cn=canonicalName(n);       // "Rich-t" -> "Rich"
+                        const isDrv=hasDriverTag(n);     // still show a driver indicator
+                        const isF=isForeman(cn); const fc=isF?colorOf(cn):null;
+                        const multiCount=multiCounts.get(cn);
+                        const isHl=hlPerson===cn;
+                        const hasMoved=movedCrew.has(cn);
                         const chip=<span style={{display:"inline-block",padding:"2px 7px",borderRadius:"4px",fontSize:"11px",
-                          background:isHl?"rgba(56,189,248,0.2)":hasMoved?"rgba(16,185,129,0.12)":isF?`${fc}18`:"rgba(255,255,255,0.05)",
-                          color:isF?fc:hasMoved?"#34d399":"#9ca3af",
+                          background:isHl?"rgba(56,189,248,0.2)":hasMoved?"rgba(16,185,129,0.12)":isDrv?"rgba(139,92,246,0.08)":isF?`${fc}18`:"rgba(255,255,255,0.05)",
+                          color:isF?fc:hasMoved?"#34d399":isDrv?"#8b5cf6":"#9ca3af",
                           fontWeight:isF?700:hasMoved?600:400,
-                          border:isHl?"1px solid rgba(56,189,248,0.7)":hasMoved?"1px solid rgba(16,185,129,0.5)":multiCount?"1px solid rgba(56,189,248,0.45)":isF?`1px solid ${fc}35`:"1px solid transparent"
-                        }} title={hasMoved?"Moved to a different job vs the day before":undefined}>{hasMoved&&<span style={{marginRight:"3px",fontSize:"9px",color:"#10b981"}}>➜</span>}{n}{multiCount&&<span style={{marginLeft:"4px",fontSize:"9px",fontWeight:800,color:"#38bdf8"}}>×{multiCount}</span>}</span>;
-                        if(multiCount) return <button key={j} onClick={()=>togglePerson(n)} title={isHl?"Click to clear highlight":`On ${multiCount} jobs today — click to highlight them`} style={{background:"transparent",border:"none",padding:0,cursor:"pointer",fontFamily:"inherit"}}>{chip}</button>;
+                          border:isHl?"1px solid rgba(56,189,248,0.7)":hasMoved?"1px solid rgba(16,185,129,0.5)":multiCount?"1px solid rgba(56,189,248,0.45)":isDrv?"1px solid rgba(139,92,246,0.2)":isF?`1px solid ${fc}35`:"1px solid transparent"
+                        }} title={isDrv?"Driver":hasMoved?"Moved to a different job vs the day before":undefined}>{hasMoved&&<span style={{marginRight:"3px",fontSize:"9px",color:"#10b981"}}>➜</span>}{cn}{isDrv&&<span style={{marginLeft:"3px",fontSize:"8px",color:"#8b5cf6",fontWeight:700}} title="Driver">D</span>}{multiCount&&<span style={{marginLeft:"4px",fontSize:"9px",fontWeight:800,color:"#38bdf8"}}>×{multiCount}</span>}</span>;
+                        if(multiCount) return <button key={j} onClick={()=>togglePerson(cn)} title={isHl?"Click to clear highlight":`On ${multiCount} jobs in the same slot today — click to highlight`} style={{background:"transparent",border:"none",padding:0,cursor:"pointer",fontFamily:"inherit"}}>{chip}</button>;
                         return <Fragment key={j}>{chip}</Fragment>;
                       })}
                     </div>
@@ -509,16 +550,17 @@ function MobileJobCards({orderedJobs,otJobs,regularJobs,cancelledJobs,dayData,mu
                 <div style={{display:"flex",flexWrap:"wrap",gap:"4px",marginTop:"8px"}}>
                   {(job.crew||[]).map((n,j)=>{
                     if(isStopLabel(n)) return <span key={j} style={{fontSize:"9px",fontWeight:700,color:"#2d3748",padding:"2px 6px",borderRadius:"3px",background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)"}}>{n.toUpperCase()}</span>;
-                    if(isDriverTag(n)) return <span key={j} style={{padding:"3px 8px",borderRadius:"4px",fontSize:"12px",background:"rgba(139,92,246,0.08)",color:"#8b5cf6",border:"1px solid rgba(139,92,246,0.2)"}}>{n}</span>;
-                    const isF=isForeman(n); const fc=isF?colorOf(n):null;
-                    const mc=multiCounts.get(n); const isHl=hlPerson===n;
-                    const hasMoved=movedCrew?.has(n);
+                    if(isDriverTag(n)) return null; // bare "-T"
+                    const cn=canonicalName(n); const isDrv=hasDriverTag(n);
+                    const isF=isForeman(cn); const fc=isF?colorOf(cn):null;
+                    const mc=multiCounts.get(cn); const isHl=hlPerson===cn;
+                    const hasMoved=movedCrew?.has(cn);
                     const chip=<span style={{display:"inline-block",padding:"3px 9px",borderRadius:"5px",fontSize:"12px",
-                      background:isHl?"rgba(56,189,248,0.2)":hasMoved?"rgba(16,185,129,0.12)":isF?`${fc}18`:"rgba(255,255,255,0.05)",
-                      color:isF?fc:hasMoved?"#34d399":"#9ca3af",fontWeight:isF?700:hasMoved?600:400,
-                      border:isHl?"1px solid rgba(56,189,248,0.7)":hasMoved?"1px solid rgba(16,185,129,0.5)":mc?"1px solid rgba(56,189,248,0.45)":isF?`1px solid ${fc}35`:"1px solid transparent"}}>
-                      {hasMoved&&<span style={{marginRight:"3px",fontSize:"10px",color:"#10b981"}}>➜</span>}{n}{mc&&<span style={{marginLeft:"4px",fontSize:"10px",fontWeight:800,color:"#38bdf8"}}>×{mc}</span>}</span>;
-                    return mc?<button key={j} onClick={()=>togglePerson(n)} style={{background:"transparent",border:"none",padding:0,cursor:"pointer",fontFamily:"inherit"}}>{chip}</button>:<Fragment key={j}>{chip}</Fragment>;
+                      background:isHl?"rgba(56,189,248,0.2)":hasMoved?"rgba(16,185,129,0.12)":isDrv?"rgba(139,92,246,0.08)":isF?`${fc}18`:"rgba(255,255,255,0.05)",
+                      color:isF?fc:hasMoved?"#34d399":isDrv?"#8b5cf6":"#9ca3af",fontWeight:isF?700:hasMoved?600:400,
+                      border:isHl?"1px solid rgba(56,189,248,0.7)":hasMoved?"1px solid rgba(16,185,129,0.5)":mc?"1px solid rgba(56,189,248,0.45)":isDrv?"1px solid rgba(139,92,246,0.2)":isF?`1px solid ${fc}35`:"1px solid transparent"}}>
+                      {hasMoved&&<span style={{marginRight:"3px",fontSize:"10px",color:"#10b981"}}>➜</span>}{cn}{isDrv&&<span style={{marginLeft:"3px",fontSize:"9px",color:"#8b5cf6",fontWeight:700}} title="Driver">D</span>}{mc&&<span style={{marginLeft:"4px",fontSize:"10px",fontWeight:800,color:"#38bdf8"}}>×{mc}</span>}</span>;
+                    return mc?<button key={j} onClick={()=>togglePerson(cn)} style={{background:"transparent",border:"none",padding:0,cursor:"pointer",fontFamily:"inherit"}}>{chip}</button>:<Fragment key={j}>{chip}</Fragment>;
                   })}
                 </div>
               )}
@@ -956,7 +998,7 @@ function SchedulePanel({label,accentColor,schedule,onClose}){
 }
 
 // ── Crew Roster ──────────────────────────────────────────────
-function CrewRoster({crews,pools,unavailable,unassigned,allData}){
+function CrewRoster({crews,pools,unavailable,unassigned,jobs,allData}){
   const [selectedPerson,setSelectedPerson]=useState(null);
   const [selectedPM,setSelectedPM]=useState(null);
   if(!crews) return null;
@@ -964,6 +1006,28 @@ function CrewRoster({crews,pools,unavailable,unassigned,allData}){
   const outList=unavailable||[];
   const unassignedList=unassigned||[];
   const outByForeman=f=>outList.filter(u=>u.foreman===f);
+
+  // Names that appear on JOB crews but aren't anywhere in the roster.
+  // Driver tags are stripped first, so "Rich-t" folds to "Rich" and matches
+  // the roster (not flagged), while "Juan E" / "Juan E-t" — not on the
+  // roster at all — surface here in their own column.
+  const rosterKeySet=new Set();
+  const addRoster=n=>{const c=canonicalName(n).toLowerCase();if(c)rosterKeySet.add(c);};
+  for(const f of foremanList){ addRoster(f); for(const m of (crews[f]?.members||[])) addRoster(m.name); }
+  for(const k of ["laborers","drivers","extra"]) for(const m of (pools?.[k]||[])) addRoster(m.name);
+  for(const u of outList) addRoster(u.name);
+  for(const u of unassignedList) addRoster(u.name);
+  const offRosterMap=new Map(); // canonical -> display name
+  for(const job of (jobs||[])){
+    if(job.cancelled) continue;
+    for(const raw of (job.crew||[])){
+      if(isNonPerson(raw)) continue;
+      const c=canonicalName(raw); const key=c.toLowerCase();
+      if(!key||rosterKeySet.has(key)) continue;
+      if(!offRosterMap.has(key)) offRosterMap.set(key,c);
+    }
+  }
+  const offRoster=[...offRosterMap.values()].sort((a,b)=>a.localeCompare(b)).map(name=>({name}));
   const outNoForeman=outList.filter(u=>!u.foreman);
 
   function handleSelect(name){ setSelectedPM(null); setSelectedPerson(p=>p===name?null:name); }
@@ -1089,7 +1153,8 @@ function CrewRoster({crews,pools,unavailable,unassigned,allData}){
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(210px,1fr))",gap:"10px"}}>
         {[{title:"LABORERS",data:pools?.laborers||[],accent:"#10b981"},{title:"DRIVERS",data:pools?.drivers||[],accent:"#e8a948"},{title:"EXTRA",data:pools?.extra||[],accent:"#a78bfa"},
           {title:"UNAVAILABLE",data:outList.map(u=>({name:u.name,tag:u.reason==='crossed out'?'crossed out':'vacation / injured',crew:u.foreman})),accent:"#ef4444",hint:"Out today — listed above their crew or crossed out",emptyText:"None today",unavailable:true},
-          ...(unassignedList.length?[{title:"UNASSIGNED",data:unassignedList,accent:"#f59e0b",hint:"On the roster but not under any crew or pool"}]:[])].map(sec=>
+          ...(unassignedList.length?[{title:"UNASSIGNED",data:unassignedList,accent:"#f59e0b",hint:"On the roster but not under any crew or pool"}]:[]),
+          ...(offRoster.length?[{title:"NOT ON ROSTER",data:offRoster,accent:"#38bdf8",hint:"On a job today but not found on the roster (e.g. Juan E). Driver tags like Rich-t are matched to the roster and not listed here."}]:[])].map(sec=>
           <div key={sec.title} style={{background:"rgba(255,255,255,0.02)",borderRadius:"8px",border:"1px solid rgba(255,255,255,0.06)",padding:"12px"}}>
             <div style={{fontSize:"10px",fontWeight:800,letterSpacing:"1.5px",color:sec.accent,marginBottom:"8px",borderBottom:`1px solid ${sec.accent}25`,paddingBottom:"6px"}}>
               {sec.title} <span style={{color:"#444",fontWeight:400}}>({sec.data.length})</span>
@@ -1475,7 +1540,7 @@ export default function App(){
                 }
                 {activeTab==="schedule"&&isMobile&&cur?.date&&<div style={{fontSize:"12px",fontWeight:700,color:"#7a8599",marginBottom:"10px",marginTop:"-4px"}}>{new Date(cur.date+"T12:00:00").toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}</div>}
                 {activeTab==="schedule"&&<JobsTable dayData={cur} flashedJobs={flashedJobs} weeksCache={weeksCache} curSatKey={currentWeekSat}/>}
-                {activeTab==="roster"&&<CrewRoster crews={cur?.crews} pools={cur?.pools} unavailable={cur?.unavailable} unassigned={cur?.unassigned} allData={data}/>}
+                {activeTab==="roster"&&<CrewRoster crews={cur?.crews} pools={cur?.pools} unavailable={cur?.unavailable} unassigned={cur?.unassigned} jobs={cur?.jobs} allData={data}/>}
                 {activeTab==="week"&&<WeekOverview data={data} selectedDay={selectedDay} onSelectDay={d=>{setSelectedDay(d);setActiveTab("schedule");}}/>}
                 {activeTab==="month"&&<MonthCalendar weeksCache={weeksCache} monthCursor={monthCursor} setMonthCursor={setMonthCursor} onPickDay={pickCalendarDay} mode={mode} requestWeek={fetchWeek} isMobile={isMobile}/>}
                 {activeTab==="changes"&&<ChangeLogPanel changeLog={changeLog} onClear={()=>setChangeLog([])}/>}
