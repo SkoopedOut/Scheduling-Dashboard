@@ -1197,6 +1197,7 @@ function WeekOverview({data,selectedDay,onSelectDay}){
         const d=data[dn]; const act=(d?.jobs||[]).filter(j=>!j.cancelled);
         const jc=act.length; const tm=act.reduce((s,j)=>s+(j.numMen||0),0);
         const otc=act.filter(j=>isOvertimeStart(j.onsiteTime)).length;
+        const tc=act.filter(j=>j.trucks&&!/^(na|n\/a)$/i.test(String(j.trucks).trim())).length;
         const cc=(d?.jobs||[]).length-jc;
         const isToday=dn===getTodayDayName(); const isSel=dn===selectedDay;
         return(
@@ -1208,7 +1209,10 @@ function WeekOverview({data,selectedDay,onSelectDay}){
             <div style={{fontSize:"11px",color:"#6b7789",margin:"4px 0 8px"}}>{formatDate(d?.date)}</div>
             <div style={{fontSize:"28px",fontWeight:900,color:"#e2e8f0",lineHeight:1}}>{jc}</div>
             <div style={{fontSize:"9px",color:"#4a5568",marginTop:"2px"}}>{jc===1?"JOB":"JOBS"}</div>
-            <div style={{fontSize:"12px",color:"#e8a948",fontWeight:700,marginTop:"8px",fontFamily:"'JetBrains Mono',monospace"}}>{tm} <span style={{fontSize:"9px",color:"#444"}}>MEN</span></div>
+            <div style={{display:"flex",gap:"10px",justifyContent:"center",alignItems:"baseline",marginTop:"8px"}}>
+              <div style={{fontSize:"12px",color:"#e8a948",fontWeight:700,fontFamily:"'JetBrains Mono',monospace"}}>{tm} <span style={{fontSize:"9px",color:"#444"}}>MEN</span></div>
+              {tc>0&&<div style={{fontSize:"12px",color:"#10b981",fontWeight:700,fontFamily:"'JetBrains Mono',monospace"}}>{tc} <span style={{fontSize:"9px",color:"#444"}}>{tc===1?"TRUCK":"TRUCKS"}</span></div>}
+            </div>
             {otc>0&&<div style={{fontSize:"9px",fontWeight:800,color:"#facc15",marginTop:"4px",fontFamily:"'JetBrains Mono',monospace"}}>⏱ {otc} OT</div>}
             {cc>0&&<div style={{fontSize:"9px",fontWeight:800,color:"#ef4444",marginTop:"4px",fontFamily:"'JetBrains Mono',monospace"}}>✕ {cc} CANCELLED</div>}
             {isToday&&<div style={{fontSize:"8px",fontWeight:800,letterSpacing:"1.2px",color:"#10b981",marginTop:"6px"}}>TODAY</div>}
