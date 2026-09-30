@@ -82,6 +82,14 @@ const P = {
   folder: <path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.2h7a2 2 0 0 1 2 2v7.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" />,
   xmark: <path d="M6.5 6.5l11 11M17.5 6.5l-11 11" />,
   info: <><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5.5" /><circle cx="12" cy="7.8" r=".7" fill="currentColor" /></>,
+  plus: <path d="M12 5v14M5 12h14" />,
+  minus: <path d="M5 12h14" />,
+  pencil: <><path d="M14.5 5.5l4 4L8 20H4v-4z" /><path d="M12.5 7.5l4 4" /></>,
+  link: <><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1" /><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1" /></>,
+  trash: <><path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13" /></>,
+  phone: <path d="M6.5 3.5h3l1.5 4-2 1.5a11 11 0 0 0 6 6l1.5-2 4 1.5v3a2 2 0 0 1-2 2A16 16 0 0 1 4.5 5.5a2 2 0 0 1 2-2z" />,
+  envelope: <><rect x="3" y="5.5" width="18" height="13" rx="2.5" /><path d="M4 7l8 6 8-6" /></>,
+  doc: <><path d="M6 3.5h8l4 4v13H6z" /><path d="M14 3.5v4h4M9 12h6M9 15.5h6" /></>,
   twoArrows: <><path d="M4 8h14M14.5 4.5L18 8l-3.5 3.5M20 16H6M9.5 12.5L6 16l3.5 3.5" /></>,
 };
 export function Icon({ name, size = 18, color = 'currentColor', weight = 1.9, style, title }) {
@@ -322,4 +330,136 @@ export function useWidth() {
     return () => ro.disconnect();
   }, []);
   return [ref, w];
+}
+
+// ── Filled button (prominent) ────────────────────────────────
+export function FilledButton({ children, onClick, color = A.tint, disabled, style, title, ariaLabel, type = 'button' }) {
+  return (
+    <button type={type} onClick={onClick} disabled={disabled} title={title} aria-label={ariaLabel} className="ap-btn ap-press" style={{
+      background: disabled ? A.fill3 : color, color: disabled ? A.label3 : '#fff', border: 'none', borderRadius: 10,
+      padding: '8px 16px', cursor: disabled ? 'default' : 'pointer', fontSize: 15, fontWeight: 600,
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, whiteSpace: 'nowrap', ...style,
+    }}>{children}</button>
+  );
+}
+// Gray bordered-less button (UIButton .gray)
+export function GrayButton({ children, onClick, disabled, style, title, color = A.label, ariaLabel }) {
+  return (
+    <button type="button" onClick={onClick} disabled={disabled} title={title} aria-label={ariaLabel} className="ap-btn ap-press" style={{
+      background: A.fill3, color: disabled ? A.label3 : color, border: 'none', borderRadius: 10, padding: '8px 14px',
+      cursor: disabled ? 'default' : 'pointer', fontSize: 15, fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', ...style,
+    }}>{children}</button>
+  );
+}
+
+// ── iOS switch ───────────────────────────────────────────────
+export function Switch({ checked, onChange, ariaLabel, disabled }) {
+  return (
+    <button type="button" role="switch" aria-checked={checked} aria-label={ariaLabel} disabled={disabled}
+      onClick={() => onChange(!checked)} className="ap-btn" style={{
+        width: 51, height: 31, borderRadius: 999, border: 'none', padding: 2, cursor: disabled ? 'default' : 'pointer', flexShrink: 0,
+        background: checked ? A.green : A.fill, transition: 'background-color .2s ease', opacity: disabled ? 0.5 : 1, position: 'relative',
+      }}>
+      <span style={{ display: 'block', width: 27, height: 27, borderRadius: '50%', background: '#fff', boxShadow: '0 3px 8px rgba(0,0,0,0.15), 0 3px 1px rgba(0,0,0,0.06)',
+        transform: `translateX(${checked ? 20 : 0}px)`, transition: 'transform .22s cubic-bezier(.3,.7,.3,1)' }} />
+    </button>
+  );
+}
+
+// ── Form fields ──────────────────────────────────────────────
+export const fieldStyle = {
+  width: '100%', height: 38, borderRadius: 9, border: 'none', outline: 'none', background: A.fill4, color: A.label,
+  fontFamily: 'inherit', fontSize: 15, padding: '0 11px',
+};
+export function TextInput({ value, onChange, onBlur, placeholder, readOnly, invalid, style, ariaLabel, type = 'text' }) {
+  return <input type={type} value={value ?? ''} onChange={e => onChange?.(e.target.value)} onBlur={onBlur} placeholder={placeholder} readOnly={readOnly}
+    aria-label={ariaLabel || placeholder} aria-invalid={invalid || undefined} className="ap-search ap-focus"
+    style={{ ...fieldStyle, color: readOnly ? A.label2 : A.label, boxShadow: invalid ? `inset 0 0 0 1.5px ${A.red}` : 'none', ...style }} />;
+}
+export function SelectField({ value, onChange, children, style, ariaLabel }) {
+  return (
+    <div style={{ position: 'relative', ...style }}>
+      <select value={value} onChange={e => onChange(e.target.value)} aria-label={ariaLabel} className="ap-focus"
+        style={{ ...fieldStyle, appearance: 'none', WebkitAppearance: 'none', paddingRight: 30, cursor: 'pointer' }}>{children}</select>
+      <span style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%) rotate(90deg)', color: A.label2, pointerEvents: 'none' }}>
+        <Icon name="chevronRight" size={13} weight={2.4} />
+      </span>
+    </div>
+  );
+}
+// Settings-style row: label on the left, control on the right
+export function FormRow({ label, hint, children, first, stacked }) {
+  return (
+    <div style={{ padding: '0 16px' }}>
+      <div style={{ display: 'flex', flexDirection: stacked ? 'column' : 'row', alignItems: stacked ? 'stretch' : 'center', gap: stacked ? 6 : 12,
+        padding: '10px 0', borderTop: first ? 'none' : `0.5px solid ${A.sep}`, minHeight: 44 }}>
+        <div style={{ flex: stacked ? undefined : 1, minWidth: 0 }}>
+          <div style={{ fontSize: 15, color: A.label }}>{label}</div>
+          {hint && <div style={{ fontSize: 12, color: A.label2, marginTop: 2 }}>{hint}</div>}
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ── Sheet (modal card; bottom sheet on phones) ───────────────
+export function Sheet({ open, onClose, title, subtitle, children, isMobile, accessory, width = 560 }) {
+  const ref = useRef(null);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const h = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', h);
+    ref.current?.focus();
+    return () => window.removeEventListener('keydown', h);
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 900, background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)',
+      display: 'flex', alignItems: isMobile ? 'flex-end' : 'center', justifyContent: 'center', padding: isMobile ? 0 : 24 }}>
+      <div ref={ref} tabIndex={-1} role="dialog" aria-modal="true" aria-label={typeof title === 'string' ? title : undefined} onClick={e => e.stopPropagation()} className="ap-fade"
+        style={{ outline: 'none', width: '100%', maxWidth: isMobile ? 'none' : width, maxHeight: isMobile ? '88vh' : '84vh', overflow: 'auto',
+          background: A.cell, borderRadius: isMobile ? '14px 14px 0 0' : 14, boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+          paddingBottom: isMobile ? 'calc(16px + env(safe-area-inset-bottom))' : 16 }}>
+        {isMobile && <div style={{ width: 36, height: 5, borderRadius: 3, background: A.fill, margin: '7px auto 0' }} />}
+        <div style={{ position: 'sticky', top: 0, zIndex: 1, background: A.cell, display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px 12px', borderBottom: `0.5px solid ${A.sep}` }}>
+          {accessory}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 17, fontWeight: 600 }}>{title}</div>
+            {subtitle && <div style={{ fontSize: 13, color: A.label2, marginTop: 1 }}>{subtitle}</div>}
+          </div>
+          <CircleButton icon="xmark" onClick={onClose} ariaLabel="Close" size={30} />
+        </div>
+        <div style={{ padding: '16px 16px 0' }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// ── Progress ring (Activity-style) ───────────────────────────
+export function Ring({ value, total, color, size = 34, stroke = 4, children }) {
+  const r = (size - stroke) / 2, c = 2 * Math.PI * r;
+  const pct = total > 0 ? Math.min(1, value / total) : 0;
+  return (
+    <span style={{ position: 'relative', width: size, height: size, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+      <svg width={size} height={size} style={{ position: 'absolute', inset: 0, transform: 'rotate(-90deg)' }} aria-hidden>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={tint(color, 0.22)} strokeWidth={stroke} />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round"
+          strokeDasharray={`${c * pct} ${c}`} style={{ transition: 'stroke-dasharray .4s ease' }} />
+      </svg>
+      <span className="tnum" style={{ position: 'relative', fontSize: size * 0.3, fontWeight: 600 }}>{children}</span>
+    </span>
+  );
+}
+
+// Empty-state block
+export function EmptyState({ icon = 'info', title, children, action }) {
+  return (
+    <div style={{ padding: '44px 20px', textAlign: 'center' }}>
+      <div style={{ color: A.label3, display: 'flex', justifyContent: 'center', marginBottom: 10 }}><Icon name={icon} size={34} weight={1.5} /></div>
+      <div style={{ fontSize: 17, fontWeight: 600 }}>{title}</div>
+      {children && <div style={{ fontSize: 14, color: A.label2, marginTop: 4, maxWidth: 440, marginInline: 'auto', lineHeight: 1.45 }}>{children}</div>}
+      {action && <div style={{ marginTop: 14 }}>{action}</div>}
+    </div>
+  );
 }

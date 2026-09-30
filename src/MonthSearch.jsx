@@ -5,7 +5,7 @@
 //
 // Data comes from the same weeksCache the rest of the app uses; this view
 // asks the app to load every week that overlaps the month.
-import { useEffect, useMemo, useRef, Fragment } from 'react';
+import { useEffect, useMemo, useState, Fragment } from 'react';
 import {
   DAY_ORDER, SYS, PM_COLORS, foremanColor, isOvertimeStart, isNonPerson, canonicalName, hasDriverTag,
   getSaturdayKey, isoDate, todayIso, jobMatchesQuery, satKeyToLabel,
@@ -260,7 +260,8 @@ export default function MonthSearch({
     );
   } else if (person) {
     body = <PersonAgenda person={person} model={model} y={y} m={m} q={q} wide={wide} loadedDates={loadedDates}
-      onBack={() => setPersonKey(null)} backLabel={ROLE_VIEWS.find(v => v.id === view)?.label || 'Back'} onOpenDay={onOpenDay} isMobile={isMobile} />;
+      onBack={() => { setView(person.isPM ? 'pm' : person.role); setPersonKey(null); }}
+      backLabel={ROLE_VIEWS.find(v => v.id === (person.isPM ? 'pm' : person.role))?.label || 'Back'} onOpenDay={onOpenDay} isMobile={isMobile} />;
   } else if (view === 'jobs') {
     body = <JobsResults model={model} y={y} m={m} q={q} wide={wide} loadedDates={loadedDates} onOpenDay={onOpenDay}
       onPickPerson={(p) => { setView(p.isPM ? 'pm' : p.role); setPersonKey(p.key); }} isMobile={isMobile} monthName={monthName} />;
@@ -548,14 +549,23 @@ function RoleBoard({ model, role, y, m, dim, q, wide, loadedDates, onPickPerson,
 // ── Person agenda ────────────────────────────────────────────
 function PersonAgenda({ person: p, model, y, m, q, wide, loadedDates, onBack, backLabel, onOpenDay, isMobile }) {
   const color = p.color || (p.isPM ? PM_COLORS[p.code] : SYS.blue);
+  const todayStr = todayIso();
+  const monthHasToday = todayStr.startsWith(`${y}-${String(m + 1).padStart(2, '0')}-`);
+  const [upcoming, setUpcoming] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const copyLink = async () => {
+    try { await navigator.clipboard.writeText(window.location.href); setCopied(true); setTimeout(() => setCopied(false), 2200); }
+    catch { window.prompt('Copy this link:', window.location.href); }
+  };
   const groups = useMemo(() => {
     const byDate = new Map();
     for (const e of p.entries) {
       if (q && !jobMatchesQuery(e.job, q)) continue;
+      if (upcoming && monthHasToday && e.date < todayStr) continue;
       (byDate.get(e.date) || byDate.set(e.date, { date: e.date, day: e.day, entries: [] }).get(e.date)).entries.push(e);
     }
     return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
-  }, [p, q]);
+  }, [p, q, upcoming, monthHasToday, todayStr]);
   const marks = useMemo(() => {
     const mk = new Map();
     for (const g of groups) {
@@ -643,6 +653,12 @@ function PersonAgenda({ person: p, model, y, m, q, wide, loadedDates, onBack, ba
                       {role && <div style={{ fontSize: 13, color: A.label2, marginTop: 3, display: 'flex', alignItems: 'center', gap: 5 }}>
                         {e.driving && <Icon name="truck" size={14} color={SYS.purple} />}{role}
                       </div>}
+                      {p.isPM && (() => {
+                        const names = []; for (const c of job.crew || []) { if (isNonPerson(c)) continue; const cn = canonicalName(c); if (!names.includes(cn)) names.push(cn); }
+                        return <div style={{ fontSize: 13, color: names.length ? A.label : SYS.orange, marginTop: 3, lineHeight: 1.45 }}>
+                          {names.length ? names.map((nm, k) => <Fragment key={nm}>{k > 0 && ', '}<span style={{ fontWeight: jobLeads.includes(nm) ? 600 : 400 }}><Highlight text={nm} q={q} /></span></Fragment>) : 'No crew assigned yet'}
+                        </div>;
+                      })()}
                     </div>
                     {!p.isPM && <PMBadge initials={job.calledIn} size="sm" />}
                     <span style={{ color: A.label3 }}><Icon name="chevronRight" size={14} weight={2.4} /></span>
@@ -658,7 +674,15 @@ function PersonAgenda({ person: p, model, y, m, q, wide, loadedDates, onBack, ba
 
   return (
     <div className="ap-fade">
-      <PlainButton onClick={onBack} style={{ marginLeft: -8, marginBottom: 10, fontSize: 17 }}><Icon name="chevronLeft" size={20} weight={2.4} />{backLabel}</PlainButton>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+        <PlainButton onClick={onBack} style={{ marginLeft: -8, fontSize: 17 }}><Icon name="chevronLeft" size={20} weight={2.4} />{backLabel}</PlainButton>
+        <div style={{ flex: 1 }} />
+        {monthHasToday && <Segmented size="sm" ariaLabel="Which days" value={upcoming ? 'up' : 'all'} onChange={v => setUpcoming(v === 'up')} fullWidth={false}
+          options={[{ id: 'all', label: 'Whole month' }, { id: 'up', label: 'Today on' }]} style={{ width: 200 }} />}
+        <PlainButton onClick={copyLink} title="Copy a link that opens this month view — handy to bookmark" style={{ fontSize: 15 }}>
+          <Icon name={copied ? 'checkmark' : 'link'} size={16} weight={2.2} />{copied ? 'Link copied' : 'Copy link'}
+        </PlainButton>
+      </div>
       {wide
         ? <div style={{ display: 'grid', gridTemplateColumns: '340px minmax(0,1fr)', gap: 28, alignItems: 'start' }}>
             <aside style={{ position: 'sticky', top: 16 }}>{card}</aside>

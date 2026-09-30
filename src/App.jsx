@@ -18,6 +18,13 @@ import {
 } from './scheduleUtils.js';
 import { A, APPLE_CSS, Icon, Segmented, Spinner, QualBadge, PMBadge, FolderIcon, Capsule, TintedButton, CircleButton, PlainButton, tint } from './ui/apple.jsx';
 import SchedulePage, { WeekStrip } from './SchedulePage.jsx';
+import RosterTab from './tabs/RosterTab.jsx';
+import WeekTab from './tabs/WeekTab.jsx';
+import MonthTab from './tabs/MonthTab.jsx';
+import ChangesTab from './tabs/ChangesTab.jsx';
+import TVMode from './tabs/TVMode.jsx';
+import { loadChangeLog, saveChangeLog, diffJobFields } from './changeLog.js';
+import { profileFor, rosterKey } from './profiles.js';
 
 const SAMPLE_SAT="2026-03-28";
 const INITIAL_SAT=getSaturdayKey();
@@ -66,324 +73,6 @@ function ConnectionBar({mode,lastRefresh,nextRefresh,isConnected,onConnect,onRef
 }
 
 
-// ── TV / Kiosk Mode ──────────────────────────────────────────
-const TV_ROTATE_MS=25000;
-function TVClock(){
-  const [now,setNow]=useState(new Date());
-  useEffect(()=>{const t=setInterval(()=>setNow(new Date()),1000);return()=>clearInterval(t);},[]);
-  return <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:"4vh",fontWeight:800,color:"#e2e8f0"}}>{now.toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})}</span>;
-}
-function TVMode({data,onExit,fileMeta,error,isRefreshing}){
-  const [view,setView]=useState(0);
-  const [paused,setPaused]=useState(false);
-  useEffect(()=>{
-    if(paused) return;
-    const t=setInterval(()=>setView(v=>(v+1)%2),TV_ROTATE_MS);
-    return()=>clearInterval(t);
-  },[paused]);
-  useEffect(()=>{
-    const h=e=>{if(e.key==="Escape")onExit();};
-    window.addEventListener("keydown",h);
-    return()=>window.removeEventListener("keydown",h);
-  },[onExit]);
-  const today=getTodayDayName();
-  const d=data[today];
-  const jobs=d?.jobs||[];
-  const active=jobs.filter(j=>!j.cancelled);
-  const regular=active.filter(j=>!isOvertimeStart(j.onsiteTime));
-  const ot=active.filter(j=>isOvertimeStart(j.onsiteTime));
-  const cancelled=jobs.filter(j=>j.cancelled);
-  const ordered=[...regular,...ot,...cancelled];
-  const totalMen=active.reduce((s,j)=>s+(j.numMen||0),0);
-  // Density tiers: shrink rows as the day fills up so more fits on screen
-  const n=ordered.length;
-  const dense=n>8;
-  const rowFont=n>12?"1.9vh":n>8?"2.1vh":"2.6vh";
-  const subFont=n>12?"1.7vh":dense?"1.8vh":"2.1vh";
-  const cellPad=n>12?"0.85vh 0.8vw":"1.4vh 0.8vw";
-
-  // Kiosk auto-scroll: when the job list still overflows, hold at the top,
-  // glide down slowly, hold at the bottom, then return to the top and repeat.
-  // Tapping the screen pauses (same tap that pauses view rotation).
-  const scrollRef=useRef(null);
-  useEffect(()=>{
-    const el=scrollRef.current;
-    if(!el||paused||view!==0) return;
-    let stop=false,raf=0,tmo=0;
-    const HOLD=5000;                       // dwell at top/bottom (ms)
-    const pxPerMs=el.clientHeight/15000;   // one screen height per ~15s
-    const cycle=()=>{
-      if(stop)return;
-      const max=el.scrollHeight-el.clientHeight;
-      if(max<=6){tmo=setTimeout(cycle,4000);return;} // everything fits — nothing to do
-      let last=null;
-      const down=ts=>{
-        if(stop)return;
-        if(last==null)last=ts;
-        el.scrollTop=Math.min(el.scrollTop+(ts-last)*pxPerMs,max);
-        last=ts;
-        if(el.scrollTop>=max-1){
-          tmo=setTimeout(()=>{
-            if(stop)return;
-            el.scrollTo({top:0,behavior:"smooth"});
-            tmo=setTimeout(cycle,1500);
-          },HOLD);
-        } else raf=requestAnimationFrame(down);
-      };
-      tmo=setTimeout(()=>{raf=requestAnimationFrame(down);},HOLD);
-    };
-    el.scrollTop=0;
-    cycle();
-    return()=>{stop=true;cancelAnimationFrame(raf);clearTimeout(tmo);};
-  },[paused,view,n,today]);
-  return(
-    <div style={{position:"fixed",inset:0,background:"#0a0f16",color:"#e2e8f0",fontFamily:"'Inter',-apple-system,sans-serif",display:"flex",flexDirection:"column",zIndex:1000,overflow:"hidden"}}>
-      <style>{`@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}} .tv-scroll{scrollbar-width:none;-ms-overflow-style:none} .tv-scroll::-webkit-scrollbar{display:none}`}</style>
-      {/* TV header */}
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"2vh 3vw",borderBottom:"1px solid rgba(255,255,255,0.07)"}}>
-        <div style={{display:"flex",alignItems:"baseline",gap:"2vw"}}>
-          <span style={{fontSize:"4.5vh",fontWeight:900,letterSpacing:"-1px"}}>{today.toUpperCase()}</span>
-          <span style={{fontSize:"2.6vh",color:"#6b7789",fontFamily:"'JetBrains Mono',monospace"}}>{d?.date?formatDate(d.date):""}</span>
-          <span style={{fontSize:"2.2vh",color:error?"#ef4444":"#10b981"}}>
-            <span style={{display:"inline-block",width:"1.4vh",height:"1.4vh",borderRadius:"50%",background:error?"#ef4444":"#10b981",marginRight:"0.7vw",animation:isRefreshing?"spin 1s linear infinite":"none"}}/>
-            {error?"OFFLINE":"LIVE"}
-          </span>
-        </div>
-        <div style={{display:"flex",alignItems:"center",gap:"2vw"}}>
-          <div style={{display:"flex",gap:"1.5vw",fontSize:"2.4vh",fontFamily:"'JetBrains Mono',monospace"}}>
-            <span><b style={{color:"#4a9eff"}}>{active.length}</b> <span style={{color:"#4a5568"}}>JOBS</span></span>
-            <span><b style={{color:"#e8a948"}}>{totalMen}</b> <span style={{color:"#4a5568"}}>MEN</span></span>
-            <span><b style={{color:"#10b981"}}>{active.filter(j=>j.trucks&&!/^(na|n\/a)$/i.test(String(j.trucks).trim())).length}</b> <span style={{color:"#4a5568"}}>TRUCKS</span></span>
-            {ot.length>0&&<span><b style={{color:"#facc15"}}>{ot.length}</b> <span style={{color:"#4a5568"}}>OT</span></span>}
-            {cancelled.length>0&&<span><b style={{color:"#ef4444"}}>{cancelled.length}</b> <span style={{color:"#4a5568"}}>CANCELLED</span></span>}
-          </div>
-          <TVClock/>
-          <button onClick={onExit} title="Exit TV mode (Esc)" style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.12)",color:"#9ca3af",borderRadius:"6px",padding:"0.8vh 1.2vw",fontSize:"1.8vh",cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>✕</button>
-        </div>
-      </div>
-      {/* View body */}
-      <div ref={scrollRef} className="tv-scroll" style={{flex:1,overflow:"auto",padding:"2vh 3vw"}} onClick={()=>setPaused(p=>!p)}>
-        {view===0?(
-          jobs.length===0
-            ? <div style={{textAlign:"center",paddingTop:"20vh",fontSize:"4vh",color:"#4a5568",fontStyle:"italic"}}>No jobs scheduled today.</div>
-            : <table style={{width:"100%",borderCollapse:"collapse"}}>
-                <thead><tr style={{borderBottom:"2px solid #1a2436"}}>
-                  {["#","CUSTOMER","TIME","TRUCKS","LOCATION","CREW","PM"].map(h=>
-                    <th key={h} style={{padding:"1vh 0.8vw",textAlign:"left",fontSize:"1.6vh",fontWeight:800,letterSpacing:"2px",color:"#4a5568"}}>{h}</th>)}
-                </tr></thead>
-                <tbody>
-                  {ordered.map((job,i)=>{
-                    const isCancelled=!!job.cancelled;
-                    const isOT=!isCancelled&&isOvertimeStart(job.onsiteTime);
-                    const firstOT=isOT&&ot.length>0&&job===ot[0]&&regular.length>0;
-                    const firstCancelled=isCancelled&&job===cancelled[0];
-                    return(
-                      <Fragment key={i}>
-                        {firstOT&&<tr><td colSpan={7} style={{padding:"2vh 0.8vw 0.8vh",fontSize:"1.8vh",fontWeight:800,letterSpacing:"2px",color:"#facc15",borderBottom:"2px solid rgba(250,204,21,0.35)"}}>⏱ OVERTIME</td></tr>}
-                        {firstCancelled&&<tr><td colSpan={7} style={{padding:"2vh 0.8vw 0.8vh",fontSize:"1.8vh",fontWeight:800,letterSpacing:"2px",color:"#ef4444",borderBottom:"2px solid rgba(239,68,68,0.35)"}}>✕ CANCELLED</td></tr>}
-                        <tr style={{borderBottom:"1px solid rgba(255,255,255,0.05)",background:isCancelled?"rgba(239,68,68,0.08)":isOT?"rgba(250,204,21,0.08)":i%2?"rgba(255,255,255,0.015)":"transparent",opacity:isCancelled?0.75:1}}>
-                          <td style={{padding:cellPad,fontSize:rowFont,fontWeight:800,color:isCancelled?"#ef4444":isOT?"#facc15":"#4a9eff",fontFamily:"'JetBrains Mono',monospace"}}>{job.num}</td>
-                          <td style={{padding:cellPad,fontSize:rowFont,fontWeight:800,color:isCancelled?"#f87171":undefined,textDecoration:isCancelled?"line-through":"none"}}>{job.customer}</td>
-                          <td style={{padding:cellPad,fontSize:rowFont,fontWeight:800,color:isOT?"#facc15":"#e8a948",fontFamily:"'JetBrains Mono',monospace",whiteSpace:"nowrap"}}>{job.onsiteTime||"TBD"}</td>
-                          <td style={{padding:cellPad,fontSize:subFont,fontWeight:700,color:job.trucks&&!/^(na|n\/a)$/i.test(String(job.trucks).trim())?"#10b981":"#4a5568",fontFamily:"'JetBrains Mono',monospace",whiteSpace:"nowrap"}}>{job.trucks||"—"}</td>
-                          <td style={{padding:cellPad,fontSize:subFont,color:"#7a8599"}}>{job.location||"—"}</td>
-                          <td style={{padding:cellPad,fontSize:subFont}}>
-                            <span style={{color:"#cbd5e1"}}>{(job.crew||[]).filter(n=>!isStopLabel(n)).join("  ·  ")||"—"}</span>
-                          </td>
-                          <td style={{padding:cellPad}}><span style={{fontSize:"1.9vh",fontWeight:800,padding:"0.4vh 0.8vw",borderRadius:"5px",background:PM_COLORS[(job.calledIn||"").toUpperCase()]||"#2d3748",color:"#fff"}}>{(job.calledIn||"—").toUpperCase()}</span></td>
-                        </tr>
-                      </Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
-        ):(
-          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:"1vw",height:"100%",alignContent:"start"}}>
-            {DAY_ORDER.map(dn=>{
-              const dd=data[dn]; const act=(dd?.jobs||[]).filter(j=>!j.cancelled);
-              const jc=act.length;
-              const tm=act.reduce((s,j)=>s+(j.numMen||0),0);
-              const oc=act.filter(j=>isOvertimeStart(j.onsiteTime)).length;
-              const cc=(dd?.jobs||[]).length-jc;
-              const isToday=dn===today;
-              return(
-                <div key={dn} style={{borderRadius:"12px",padding:"2.5vh 0.5vw",textAlign:"center",
-                  background:isToday?"rgba(16,185,129,0.08)":"rgba(255,255,255,0.02)",
-                  border:isToday?"2px solid rgba(16,185,129,0.45)":"1px solid rgba(255,255,255,0.06)"}}>
-                  <div style={{fontSize:"2vh",fontWeight:800,letterSpacing:"2px",color:isToday?"#10b981":"#4a5568"}}>{dn.slice(0,3).toUpperCase()}</div>
-                  <div style={{fontSize:"1.8vh",color:"#6b7789",margin:"0.6vh 0 1.5vh"}}>{formatDate(dd?.date)}</div>
-                  <div style={{fontSize:"7vh",fontWeight:900,lineHeight:1}}>{jc}</div>
-                  <div style={{fontSize:"1.5vh",color:"#4a5568",letterSpacing:"1px"}}>{jc===1?"JOB":"JOBS"}</div>
-                  <div style={{fontSize:"2.6vh",color:"#e8a948",fontWeight:800,marginTop:"1.5vh",fontFamily:"'JetBrains Mono',monospace"}}>{tm}<span style={{fontSize:"1.4vh",color:"#4a5568"}}> MEN</span></div>
-                  {oc>0&&<div style={{fontSize:"1.9vh",fontWeight:800,color:"#facc15",marginTop:"1vh"}}>⏱ {oc} OT</div>}
-                  {cc>0&&<div style={{fontSize:"1.9vh",fontWeight:800,color:"#ef4444",marginTop:"1vh"}}>✕ {cc} CANC</div>}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-      {/* Footer: rotation dots + file info */}
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"1.2vh 3vw",borderTop:"1px solid rgba(255,255,255,0.07)",fontSize:"1.7vh",color:"#4a5568",fontFamily:"'JetBrains Mono',monospace"}}>
-        <span>{fileMeta?.lastModified?`File saved ${new Date(fileMeta.lastModified).toLocaleTimeString()}`:""}{error?` · ${error}`:""}</span>
-        <div style={{display:"flex",alignItems:"center",gap:"1vw"}}>
-          {paused&&<span style={{color:"#f59e0b"}}>⏸ PAUSED — tap to resume</span>}
-          {[0,1].map(v=>
-            <button key={v} onClick={()=>{setView(v);setPaused(true);}} style={{width:"1.6vh",height:"1.6vh",borderRadius:"50%",border:"none",cursor:"pointer",background:view===v?"#4a9eff":"rgba(255,255,255,0.12)"}}/>
-          )}
-          <span>{view===0?"TODAY":"WEEK"}</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Change Log ───────────────────────────────────────────────
-const CHANGELOG_KEY="hub-dash-changelog";
-function loadChangeLog(){
-  try{const v=JSON.parse(localStorage.getItem(CHANGELOG_KEY));return Array.isArray(v)?v:[];}catch{return[];}
-}
-function saveChangeLog(log){
-  try{localStorage.setItem(CHANGELOG_KEY,JSON.stringify(log.slice(0,100)));}catch{/* storage unavailable */}
-}
-function diffJobFields(oj,nj){
-  const parts=[];
-  if(!!oj.cancelled!==!!nj.cancelled) parts.push(nj.cancelled?"✕ CANCELLED (struck through)":"reinstated (strike removed)");
-  if(oj.customer!==nj.customer) parts.push(`customer "${oj.customer}" → "${nj.customer}"`);
-  if(oj.onsiteTime!==nj.onsiteTime) parts.push(`time ${oj.onsiteTime||"—"} → ${nj.onsiteTime||"—"}`);
-  if(oj.location!==nj.location) parts.push(`location → ${nj.location||"—"}`);
-  if(oj.numMen!==nj.numMen) parts.push(`men ${oj.numMen??"—"} → ${nj.numMen??"—"}`);
-  if(oj.trucks!==nj.trucks) parts.push(`trucks ${oj.trucks||"—"} → ${nj.trucks||"—"}`);
-  if((oj.calledIn||"")!==(nj.calledIn||"")) parts.push(`PM ${oj.calledIn||"—"} → ${nj.calledIn||"—"}`);
-  if((oj.jobFolder||"")!==(nj.jobFolder||"")) parts.push(`folder → ${(nj.jobFolder||"—").toUpperCase()}`);
-  if((oj.poJob||"")!==(nj.poJob||"")) parts.push(`PO → ${nj.poJob||"—"}`);
-  const oldCrew=new Set(oj.crew||[]),newCrew=new Set(nj.crew||[]);
-  const added=[...newCrew].filter(n=>!oldCrew.has(n));
-  const removed=[...oldCrew].filter(n=>!newCrew.has(n));
-  if(added.length) parts.push(`+ ${added.join(", ")}`);
-  if(removed.length) parts.push(`− ${removed.join(", ")}`);
-  return parts;
-}
-const KIND_STYLE={
-  added:{label:"ADDED",color:"#10b981",bg:"rgba(16,185,129,0.1)"},
-  removed:{label:"REMOVED",color:"#ef4444",bg:"rgba(239,68,68,0.1)"},
-  changed:{label:"CHANGED",color:"#e8a948",bg:"rgba(232,169,72,0.1)"},
-};
-function ChangeLogPanel({changeLog,onClear}){
-  if(!changeLog.length) return(
-    <div style={{padding:"60px 20px",textAlign:"center",color:"#4a5568",fontStyle:"italic"}}>
-      No changes recorded yet.<br/>
-      <span style={{fontSize:"11px"}}>When the Excel file changes between refreshes, every edit shows up here — job times, crews, additions, removals.</span>
-    </div>
-  );
-  return(
-    <div>
-      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:"10px"}}>
-        <button onClick={onClear} style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.1)",color:"#7a8599",borderRadius:"5px",padding:"4px 12px",fontSize:"10px",fontWeight:700,cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.5px"}}>CLEAR HISTORY</button>
-      </div>
-      <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
-        {changeLog.map((e,i)=>{
-          const ks=KIND_STYLE[e.kind]||KIND_STYLE.changed;
-          return(
-            <div key={i} style={{display:"flex",alignItems:"flex-start",gap:"10px",padding:"9px 12px",borderRadius:"7px",background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.05)",fontSize:"12px",flexWrap:"wrap"}}>
-              <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:"10px",color:"#4a5568",whiteSpace:"nowrap",paddingTop:"2px"}}>
-                {new Date(e.ts).toLocaleDateString([], {month:"short",day:"numeric"})} {new Date(e.ts).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})}
-              </span>
-              <span style={{fontSize:"9px",fontWeight:800,letterSpacing:"0.8px",padding:"2px 7px",borderRadius:"4px",color:ks.color,background:ks.bg,whiteSpace:"nowrap"}}>{ks.label}</span>
-              <span style={{fontWeight:700,color:"#9ca3af",whiteSpace:"nowrap"}}>{e.day} · #{e.num}</span>
-              <span style={{fontWeight:700,color:"#e2e8f0"}}>{e.customer}</span>
-              {e.details?.length>0&&<span style={{color:"#7a8599",flex:1,minWidth:"180px"}}>{e.details.join("  ·  ")}</span>}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ── Month Calendar ───────────────────────────────────────────
-function MonthCalendar({weeksCache,monthCursor,setMonthCursor,onPickDay,mode,requestWeek,isMobile,onSearchMonth}){
-  // Index every cached day by its real date
-  const idx={};
-  for(const wd of Object.values(weeksCache)){
-    for(const day of DAY_ORDER){
-      const dd=wd?.[day];
-      if(!dd?.date) continue;
-      const act=(dd.jobs||[]).filter(j=>!j.cancelled);
-      idx[dd.date]={
-        day,date:dd.date,
-        jobs:act.length,
-        men:act.reduce((s,j)=>s+(j.numMen||0),0),
-        ot:act.filter(j=>isOvertimeStart(j.onsiteTime)).length,
-        cancelled:(dd.jobs||[]).length-act.length,
-      };
-    }
-  }
-  const y=monthCursor.getFullYear(), m=monthCursor.getMonth();
-  const daysInMonth=new Date(y,m+1,0).getDate();
-  const startDow=new Date(y,m,1).getDay();
-  const todayStr=(()=>{const t=new Date();return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,"0")}-${String(t.getDate()).padStart(2,"0")}`;})();
-
-  // Prefetch every week overlapping this month (live mode only)
-  useEffect(()=>{
-    if(mode!=="live") return;
-    const keys=new Set();
-    for(let d=1;d<=daysInMonth;d++) keys.add(getSaturdayKey(new Date(y,m,d)));
-    keys.forEach(k=>requestWeek(k,{once:true}));
-  },[y,m,mode]); // eslint-disable-line
-
-  const monthMen=Object.keys(idx).filter(ds=>ds.startsWith(`${y}-${String(m+1).padStart(2,"0")}`)).reduce((s,ds)=>s+idx[ds].men,0);
-  const monthJobs=Object.keys(idx).filter(ds=>ds.startsWith(`${y}-${String(m+1).padStart(2,"0")}`)).reduce((s,ds)=>s+idx[ds].jobs,0);
-
-  const cells=[];
-  for(let i=0;i<startDow;i++) cells.push(null);
-  for(let d=1;d<=daysInMonth;d++) cells.push(d);
-
-  return(
-    <div>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"14px",flexWrap:"wrap",gap:"8px"}}>
-        <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
-          <button onClick={()=>setMonthCursor(new Date(y,m-1,1))} style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",color:"#7a8599",cursor:"pointer",borderRadius:"5px",padding:"3px 12px",fontSize:"16px",fontFamily:"inherit"}}>‹</button>
-          <span style={{fontSize:"15px",fontWeight:800,minWidth:"150px",textAlign:"center"}}>{monthCursor.toLocaleDateString("en-US",{month:"long",year:"numeric"})}</span>
-          <button onClick={()=>setMonthCursor(new Date(y,m+1,1))} style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",color:"#7a8599",cursor:"pointer",borderRadius:"5px",padding:"3px 12px",fontSize:"16px",fontFamily:"inherit"}}>›</button>
-          <button onClick={()=>setMonthCursor(new Date(new Date().getFullYear(),new Date().getMonth(),1))} style={{background:"rgba(16,185,129,0.08)",border:"1px solid rgba(16,185,129,0.2)",color:"#10b981",cursor:"pointer",borderRadius:"5px",padding:"4px 10px",fontSize:"10px",fontWeight:700,fontFamily:"inherit",letterSpacing:"0.5px"}}>THIS MONTH</button>
-        </div>
-        {onSearchMonth&&<TintedButton onClick={onSearchMonth} style={{fontSize:13}}><Icon name="search" size={14} weight={2.2}/>Search this month</TintedButton>}
-        <div style={{fontSize:"11px",color:"#6b7789",fontFamily:"'JetBrains Mono',monospace"}}>
-          Month totals: <span style={{color:"#4a9eff",fontWeight:700}}>{monthJobs}</span> jobs · <span style={{color:"#e8a948",fontWeight:700}}>{monthMen}</span> man-days
-        </div>
-      </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:isMobile?"4px":"8px"}}>
-        {DAY_ORDER.map(dn=><div key={dn} style={{textAlign:"center",fontSize:"9px",fontWeight:800,letterSpacing:"1px",color:"#4a5568",padding:"2px 0"}}>{dn.slice(0,3).toUpperCase()}</div>)}
-        {cells.map((d,i)=>{
-          if(d==null) return <div key={`b${i}`}/>;
-          const ds=`${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
-          const info=idx[ds];
-          const isToday=ds===todayStr;
-          const clickable=!!info;
-          return(
-            <button key={ds} onClick={()=>clickable&&onPickDay(info)} disabled={!clickable} style={{
-              minHeight:isMobile?"62px":"86px",borderRadius:"8px",padding:isMobile?"5px":"8px",textAlign:"left",fontFamily:"inherit",
-              display:"flex",flexDirection:"column",gap:"2px",
-              background:isToday?"rgba(16,185,129,0.07)":info?"rgba(255,255,255,0.025)":"rgba(255,255,255,0.008)",
-              border:isToday?"1px solid rgba(16,185,129,0.4)":info?"1px solid rgba(255,255,255,0.07)":"1px solid rgba(255,255,255,0.03)",
-              cursor:clickable?"pointer":"default",color:"inherit",transition:"all 0.12s"}}>
-              <span style={{fontSize:isMobile?"10px":"11px",fontWeight:800,color:isToday?"#10b981":info?"#9ca3af":"#2d3748",fontFamily:"'JetBrains Mono',monospace"}}>{d}</span>
-              {info&&<>
-                <span style={{fontSize:isMobile?"14px":"19px",fontWeight:900,lineHeight:1,color:"#e2e8f0"}}>{info.jobs}<span style={{fontSize:isMobile?"7px":"8px",fontWeight:800,color:"#4a5568",marginLeft:"3px"}}>JOBS</span></span>
-                <span style={{fontSize:isMobile?"10px":"12px",fontWeight:700,color:"#e8a948",fontFamily:"'JetBrains Mono',monospace"}}>{info.men} <span style={{fontSize:isMobile?"7px":"8px",color:"#4a5568"}}>MEN</span></span>
-                {info.ot>0&&<span style={{fontSize:isMobile?"8px":"9px",fontWeight:800,color:"#facc15"}}>⏱ {info.ot} OT</span>}
-                {info.cancelled>0&&<span style={{fontSize:isMobile?"8px":"9px",fontWeight:800,color:"#ef4444"}}>✕ {info.cancelled}</span>}
-              </>}
-            </button>
-          );
-        })}
-      </div>
-      {mode!=="live"&&<div style={{marginTop:"12px",fontSize:"11px",color:"#4a5568",fontStyle:"italic"}}>Demo mode shows only the sample week — connect to SharePoint to fill in the month.</div>}
-    </div>
-  );
-}
-
 // ── Mobile tab bar (UITabBar) ────────────────────────────────
 function BottomNav({tabs,activeTab,setActiveTab}){
   return(
@@ -406,307 +95,17 @@ function BottomNav({tabs,activeTab,setActiveTab}){
   );
 }
 
-// ── Helpers ──────────────────────────────────────────────────
-function getForemanList(crews){
-  if(!crews||Object.keys(crews).length===0) return FOREMAN_ORDER;
-  // Preserve sheet order (parser inserts in reading order: top band then bottom, left to right)
-  return Object.keys(crews);
-}
-
-function getPersonDays(name,allData){
-  const result={};
-  for(const day of DAY_ORDER){
-    result[day]=(allData?.[day]?.jobs||[]).some(j=>(j.crew||[]).includes(name));
-  }
-  return result;
-}
-
-// ── Day Tracker ──────────────────────────────────────────────
-function DayTracker({name,allData}){
-  const scheduled=getPersonDays(name,allData);
-  return(
-    <div style={{display:"flex",gap:"2px"}}>
-      {DAY_ORDER.map(d=>{
-        const on=scheduled[d];
-        return(
-          <div key={d} title={d} style={{
-            width:"11px",height:"11px",borderRadius:"2px",
-            background:on?"rgba(16,185,129,0.35)":"rgba(255,255,255,0.04)",
-            border:on?"1px solid rgba(16,185,129,0.6)":"1px solid rgba(255,255,255,0.08)",
-            display:"flex",alignItems:"center",justifyContent:"center",
-            fontSize:"6px",fontWeight:800,
-            color:on?"#10b981":"#2d3748",
-          }}>{d[0]}</div>
-        );
-      })}
-    </div>
-  );
-}
-
-// ── Schedule Panel ───────────────────────────────────────────
-function SchedulePanel({label,accentColor,schedule,onClose}){
-  return(
-    <div style={{marginBottom:"24px",padding:"16px",background:"rgba(255,255,255,0.02)",borderRadius:"8px",border:`1px solid ${accentColor}35`}}>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"12px"}}>
-        <div style={{fontSize:"13px",fontWeight:800}}>
-          <span style={{color:accentColor}}>{label}</span>
-          <span style={{color:"#e2e8f0"}}>'s Week</span>
-        </div>
-        <button onClick={onClose} style={{background:"transparent",border:"none",color:"#4a5568",cursor:"pointer",fontSize:"18px",lineHeight:1,fontFamily:"inherit",padding:"0 4px"}}>×</button>
-      </div>
-      {schedule.length===0
-        ? <div style={{color:"#4a5568",fontStyle:"italic",fontSize:"12px"}}>Not scheduled for any jobs this week.</div>
-        : <div style={{display:"flex",flexDirection:"column",gap:"10px"}}>
-            {schedule.map(({day,date,jobs})=>(
-              <div key={day}>
-                <div style={{fontSize:"9px",fontWeight:800,letterSpacing:"1.2px",color:accentColor,marginBottom:"4px"}}>
-                  {day.toUpperCase()}{date&&<span style={{color:"#4a5568",fontWeight:400,fontFamily:"'JetBrains Mono',monospace"}}> · {formatDate(date)}</span>}
-                </div>
-                <div style={{display:"flex",flexDirection:"column",gap:"3px"}}>
-                  {jobs.map((job,i)=>(
-                    <div key={i} style={{display:"flex",alignItems:"center",gap:"10px",padding:"6px 10px",borderRadius:"4px",background:`${accentColor}08`,border:`1px solid ${accentColor}15`,fontSize:"12px",flexWrap:"wrap"}}>
-                      <span style={{fontWeight:700,color:"#e2e8f0",minWidth:"130px"}}>{job.customer}</span>
-                      {job.location&&<span style={{color:"#7a8599",fontSize:"11px",flex:1}}>{job.location}</span>}
-                      {job.onsiteTime&&<span style={{color:"#e8a948",fontSize:"11px",fontFamily:"'JetBrains Mono',monospace",whiteSpace:"nowrap"}}>{job.onsiteTime}</span>}
-                      {job.numMen!=null&&<span style={{color:"#f472b6",fontSize:"11px",fontFamily:"'JetBrains Mono',monospace",whiteSpace:"nowrap"}}>{job.numMen} men</span>}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-      }
-    </div>
-  );
-}
-
-// ── Crew Roster ──────────────────────────────────────────────
-function CrewRoster({crews,pools,unavailable,unassigned,jobs,allData}){
-  const [selectedPerson,setSelectedPerson]=useState(null);
-  const [selectedPM,setSelectedPM]=useState(null);
-  if(!crews) return null;
-  const foremanList=getForemanList(crews);
-  const outList=unavailable||[];
-  const unassignedList=unassigned||[];
-  const outByForeman=f=>outList.filter(u=>u.foreman===f);
-
-  // Names that appear on JOB crews but aren't anywhere in the roster.
-  // Driver tags are stripped first, so "Rich-t" folds to "Rich" and matches
-  // the roster (not flagged), while "Juan E" / "Juan E-t" — not on the
-  // roster at all — surface here in their own column.
-  const rosterKeySet=new Set();
-  const addRoster=n=>{const c=canonicalName(n).toLowerCase();if(c)rosterKeySet.add(c);};
-  for(const f of foremanList){ addRoster(f); for(const m of (crews[f]?.members||[])) addRoster(m.name); }
-  for(const k of ["laborers","drivers","extra"]) for(const m of (pools?.[k]||[])) addRoster(m.name);
-  for(const u of outList) addRoster(u.name);
-  for(const u of unassignedList) addRoster(u.name);
-  const offRosterMap=new Map(); // canonical -> display name
-  for(const job of (jobs||[])){
-    if(job.cancelled) continue;
-    for(const raw of (job.crew||[])){
-      if(isNonPerson(raw)) continue;
-      const c=canonicalName(raw); const key=c.toLowerCase();
-      if(!key||rosterKeySet.has(key)) continue;
-      if(!offRosterMap.has(key)) offRosterMap.set(key,c);
-    }
-  }
-  const offRoster=[...offRosterMap.values()].sort((a,b)=>a.localeCompare(b)).map(name=>({name}));
-  const outNoForeman=outList.filter(u=>!u.foreman);
-
-  function handleSelect(name){ setSelectedPM(null); setSelectedPerson(p=>p===name?null:name); }
-  function handleSelectPM(pm){ setSelectedPerson(null); setSelectedPM(p=>p===pm?null:pm); }
-
-  const personSchedule=selectedPerson
-    ? DAY_ORDER.reduce((acc,day)=>{
-        const jobs=(allData?.[day]?.jobs||[]).filter(j=>(j.crew||[]).includes(selectedPerson));
-        if(jobs.length) acc.push({day,date:allData[day]?.date,jobs});
-        return acc;
-      },[])
-    : [];
-
-  const pmSchedule=selectedPM
-    ? DAY_ORDER.reduce((acc,day)=>{
-        const jobs=(allData?.[day]?.jobs||[]).filter(j=>j.calledIn&&j.calledIn.toUpperCase()===selectedPM);
-        if(jobs.length) acc.push({day,date:allData[day]?.date,jobs});
-        return acc;
-      },[])
-    : [];
-
-  return(
-    <div>
-      {outList.length>0&&(
-        <div style={{padding:"8px 12px",borderRadius:"6px",background:"rgba(239,68,68,0.06)",border:"1px solid rgba(239,68,68,0.2)",fontSize:"11px",lineHeight:1.8,marginBottom:"14px"}}>
-          <span style={{fontWeight:800,color:"#ef4444",marginRight:"8px",letterSpacing:"0.5px"}}>🚫 UNAVAILABLE TODAY</span>
-          {outList.map((u,i)=>(
-            <span key={i}>
-              <span style={{color:"#f87171",fontWeight:700}}>{u.name}</span>
-              {u.foreman&&<span style={{color:"#4a5568"}}> ({u.foreman}'s crew)</span>}
-              <span style={{color:"#4a5568",fontStyle:"italic"}}> · {u.reason==='crossed out'?'crossed out':'vacation / injured'}</span>
-              {i<outList.length-1&&<span style={{margin:"0 10px",color:"#2d3748"}}>·</span>}
-            </span>
-          ))}
-        </div>
-      )}
-      <div style={{fontSize:"10px",fontWeight:800,letterSpacing:"1.5px",color:"#4a5568",marginBottom:"12px"}}>FOREMAN CREWS</div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(190px,1fr))",gap:"10px",marginBottom:"28px"}}>
-        {foremanList.map((f,fi)=>{
-          const crew=crews[f]; const color=foremanColor(f,fi);
-          const crewOut=outByForeman(f);
-          const allMembers=[f,...(crew?.members||[]).map(m=>m.name)];
-          const working=allMembers.filter(n=>DAY_ORDER.some(day=>(allData?.[day]?.jobs||[]).some(j=>(j.crew||[]).includes(n)))).length;
-          const total=allMembers.length;
-          const pct=total>0?Math.round((working/total)*100):0;
-          const utilColor=pct===100?"#10b981":pct>=60?"#e8a948":"#ef4444";
-          return(
-            <div key={f} style={{background:"rgba(255,255,255,0.02)",borderRadius:"8px",border:"1px solid rgba(255,255,255,0.06)",padding:"12px",borderTop:`3px solid ${color}`}}>
-              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"3px"}}>
-                <div style={{fontSize:"9px",fontWeight:800,letterSpacing:"1px",color}}>{f.toUpperCase()}</div>
-                <span style={{fontSize:"9px",fontWeight:700,color:utilColor,fontFamily:"'JetBrains Mono',monospace"}}>{working}/{total}</span>
-              </div>
-              <div style={{height:"3px",borderRadius:"2px",background:"rgba(255,255,255,0.06)",marginBottom:"7px"}}>
-                <div style={{height:"100%",borderRadius:"2px",width:`${pct}%`,background:utilColor,transition:"width 0.3s"}}/>
-              </div>
-              <div style={{display:"flex",flexDirection:"column",gap:"3px"}}>
-                {crewOut.map((u,i)=>(
-                  <div key={`out-${i}`} title={u.reason==='crossed out'?'Crossed out in the log book':'Listed above the crew — out on vacation or injured'} style={{
-                    display:"flex",alignItems:"center",justifyContent:"space-between",
-                    padding:"4px 8px",borderRadius:"4px",
-                    background:"rgba(239,68,68,0.05)",border:"1px dashed rgba(239,68,68,0.3)",
-                    fontSize:"12px",color:"#7a8599",opacity:0.8,
-                  }}>
-                    <span style={{textDecoration:u.reason==='crossed out'?'line-through':'none'}}>{u.name}</span>
-                    <span style={{fontSize:"8px",fontWeight:800,letterSpacing:"0.5px",padding:"1px 5px",borderRadius:"3px",background:"rgba(239,68,68,0.12)",color:"#ef4444"}}>OUT</span>
-                  </div>
-                ))}
-                <button onClick={()=>handleSelect(f)} style={{
-                  display:"flex",alignItems:"center",justifyContent:"space-between",
-                  padding:"4px 8px",borderRadius:"4px",width:"100%",textAlign:"left",fontFamily:"inherit",
-                  background:selectedPerson===f?`${color}18`:"rgba(255,255,255,0.04)",
-                  border:selectedPerson===f?`1px solid ${color}40`:"1px solid rgba(255,255,255,0.06)",
-                  fontSize:"12px",color:selectedPerson===f?color:color,
-                  cursor:"pointer",transition:"all 0.12s",fontWeight:600,
-                }}>
-                  <span>{f}<QualBadge code={crew?.qual}/></span>
-                  <DayTracker name={f} allData={allData}/>
-                </button>
-                {(crew?.members||[]).map((m,i)=>
-                  <button key={i} onClick={()=>handleSelect(m.name)} style={{
-                    display:"flex",alignItems:"center",justifyContent:"space-between",
-                    padding:"4px 8px",borderRadius:"4px",width:"100%",textAlign:"left",fontFamily:"inherit",
-                    background:selectedPerson===m.name?"rgba(74,158,255,0.08)":"rgba(255,255,255,0.03)",
-                    border:selectedPerson===m.name?"1px solid rgba(74,158,255,0.2)":"1px solid rgba(255,255,255,0.04)",
-                    fontSize:"12px",color:selectedPerson===m.name?"#e2e8f0":"#b0bac7",
-                    cursor:"pointer",transition:"all 0.12s",
-                  }}>
-                    <div style={{display:"flex",alignItems:"center"}}><span>{m.name}</span><QualBadge code={m.qual}/></div>
-                    <DayTracker name={m.name} allData={allData}/>
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {selectedPerson&&<SchedulePanel label={selectedPerson} accentColor="#4a9eff" schedule={personSchedule} onClose={()=>setSelectedPerson(null)}/>}
-
-      {/* PM Section */}
-      <div style={{fontSize:"10px",fontWeight:800,letterSpacing:"1.5px",color:"#4a5568",marginBottom:"10px"}}>PROJECT MANAGERS</div>
-      <div style={{display:"flex",gap:"6px",marginBottom:"20px",flexWrap:"wrap"}}>
-        {Object.entries(PM_COLORS).map(([pm,color])=>{
-          const isSel=selectedPM===pm;
-          const jobCount=DAY_ORDER.reduce((n,day)=>n+(allData?.[day]?.jobs||[]).filter(j=>j.calledIn&&j.calledIn.toUpperCase()===pm).length,0);
-          return(
-            <button key={pm} onClick={()=>handleSelectPM(pm)} style={{
-              display:"flex",alignItems:"center",gap:"8px",padding:"8px 16px",borderRadius:"6px",cursor:"pointer",fontFamily:"inherit",
-              background:isSel?`${color}20`:"rgba(255,255,255,0.03)",
-              border:isSel?`1px solid ${color}55`:"1px solid rgba(255,255,255,0.07)",
-              transition:"all 0.12s",
-            }}>
-              <span style={{fontSize:"13px",fontWeight:800,color}}>{pm}</span>
-              <span style={{fontSize:"10px",color:"#4a5568",fontFamily:"'JetBrains Mono',monospace"}}>{jobCount} job{jobCount!==1?"s":""}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {selectedPM&&<SchedulePanel label={`PM ${selectedPM}`} accentColor={PM_COLORS[selectedPM]} schedule={pmSchedule} onClose={()=>setSelectedPM(null)}/>}
-
-      <div style={{fontSize:"10px",fontWeight:800,letterSpacing:"1.5px",color:"#4a5568",marginBottom:"12px"}}>AVAILABLE POOL</div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(210px,1fr))",gap:"10px"}}>
-        {[{title:"LABORERS",data:pools?.laborers||[],accent:"#10b981"},{title:"DRIVERS",data:pools?.drivers||[],accent:"#e8a948"},{title:"EXTRA",data:pools?.extra||[],accent:"#a78bfa"},
-          {title:"UNAVAILABLE",data:outList.map(u=>({name:u.name,tag:u.reason==='crossed out'?'crossed out':'vacation / injured',crew:u.foreman})),accent:"#ef4444",hint:"Out today — listed above their crew or crossed out",emptyText:"None today",unavailable:true},
-          ...(unassignedList.length?[{title:"UNASSIGNED",data:unassignedList,accent:"#f59e0b",hint:"On the roster but not under any crew or pool"}]:[]),
-          ...(offRoster.length?[{title:"NOT ON ROSTER",data:offRoster,accent:"#38bdf8",hint:"On a job today but not found on the roster (e.g. Juan E). Driver tags like Rich-t are matched to the roster and not listed here."}]:[])].map(sec=>
-          <div key={sec.title} style={{background:"rgba(255,255,255,0.02)",borderRadius:"8px",border:"1px solid rgba(255,255,255,0.06)",padding:"12px"}}>
-            <div style={{fontSize:"10px",fontWeight:800,letterSpacing:"1.5px",color:sec.accent,marginBottom:"8px",borderBottom:`1px solid ${sec.accent}25`,paddingBottom:"6px"}}>
-              {sec.title} <span style={{color:"#444",fontWeight:400}}>({sec.data.length})</span>
-              {sec.hint&&<div style={{fontSize:"9px",fontWeight:400,letterSpacing:"0",color:"#6b7789",marginTop:"3px",textTransform:"none"}}>{sec.hint}</div>}
-            </div>
-            <div style={{display:"flex",flexWrap:"wrap",gap:"4px"}}>
-              {sec.data.length===0&&sec.emptyText&&<span style={{fontSize:"11px",color:"#4a5568",fontStyle:"italic",padding:"3px 2px"}}>{sec.emptyText}</span>}
-              {sec.data.map((p,i)=>
-                sec.unavailable?
-                <span key={i} title={p.tag+(p.crew?` — ${p.crew}'s crew`:"")} style={{
-                  padding:"3px 8px",borderRadius:"4px",
-                  background:"rgba(239,68,68,0.06)",border:"1px dashed rgba(239,68,68,0.35)",
-                  fontSize:"11px",color:"#f87171",
-                }}>
-                  <span style={{textDecoration:p.tag==='crossed out'?'line-through':'none'}}>{p.name}</span>
-                  {p.crew&&<span style={{color:"#6b7789",marginLeft:"5px",fontSize:"9px"}}>({p.crew})</span>}
-                  <span style={{color:"#8a5560",marginLeft:"5px",fontSize:"9px",fontStyle:"italic"}}>{p.tag}</span>
-                </span>
-                :
-                <button key={i} onClick={()=>handleSelect(p.name)} style={{
-                  padding:"3px 8px",borderRadius:"4px",cursor:"pointer",fontFamily:"inherit",
-                  background:selectedPerson===p.name?"rgba(74,158,255,0.1)":"rgba(255,255,255,0.04)",
-                  border:selectedPerson===p.name?"1px solid rgba(74,158,255,0.25)":"1px solid rgba(255,255,255,0.06)",
-                  fontSize:"11px",color:selectedPerson===p.name?"#e2e8f0":"#9ca3af",
-                }}>{p.name}</button>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── Week Overview ────────────────────────────────────────────
-function WeekOverview({data,selectedDay,onSelectDay}){
-  return(
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:"8px"}}>
-      {DAY_ORDER.map(dn=>{
-        const d=data[dn]; const act=(d?.jobs||[]).filter(j=>!j.cancelled);
-        const jc=act.length; const tm=act.reduce((s,j)=>s+(j.numMen||0),0);
-        const otc=act.filter(j=>isOvertimeStart(j.onsiteTime)).length;
-        const tc=act.filter(j=>j.trucks&&!/^(na|n\/a)$/i.test(String(j.trucks).trim())).length;
-        const cc=(d?.jobs||[]).length-jc;
-        const isToday=dn===getTodayDayName(); const isSel=dn===selectedDay;
-        return(
-          <button key={dn} onClick={()=>onSelectDay(dn)} style={{
-            background:isSel?"rgba(74,158,255,0.1)":isToday?"rgba(16,185,129,0.06)":"rgba(255,255,255,0.015)",
-            border:isSel?"1px solid rgba(74,158,255,0.35)":isToday?"1px solid rgba(16,185,129,0.25)":"1px solid rgba(255,255,255,0.05)",
-            borderRadius:"10px",padding:"16px 8px",cursor:"pointer",textAlign:"center",transition:"all 0.2s",color:"inherit",fontFamily:"inherit"}}>
-            <div style={{fontSize:"10px",fontWeight:800,letterSpacing:"1.2px",color:isSel?"#4a9eff":isToday?"#10b981":"#4a5568"}}>{dn.substring(0,3).toUpperCase()}</div>
-            <div style={{fontSize:"11px",color:"#6b7789",margin:"4px 0 8px"}}>{formatDate(d?.date)}</div>
-            <div style={{fontSize:"28px",fontWeight:900,color:"#e2e8f0",lineHeight:1}}>{jc}</div>
-            <div style={{fontSize:"9px",color:"#4a5568",marginTop:"2px"}}>{jc===1?"JOB":"JOBS"}</div>
-            <div style={{display:"flex",gap:"10px",justifyContent:"center",alignItems:"baseline",marginTop:"8px"}}>
-              <div style={{fontSize:"12px",color:"#e8a948",fontWeight:700,fontFamily:"'JetBrains Mono',monospace"}}>{tm} <span style={{fontSize:"9px",color:"#444"}}>MEN</span></div>
-              {tc>0&&<div style={{fontSize:"12px",color:"#10b981",fontWeight:700,fontFamily:"'JetBrains Mono',monospace"}}>{tc} <span style={{fontSize:"9px",color:"#444"}}>{tc===1?"TRUCK":"TRUCKS"}</span></div>}
-            </div>
-            {otc>0&&<div style={{fontSize:"9px",fontWeight:800,color:"#facc15",marginTop:"4px",fontFamily:"'JetBrains Mono',monospace"}}>⏱ {otc} OT</div>}
-            {cc>0&&<div style={{fontSize:"9px",fontWeight:800,color:"#ef4444",marginTop:"4px",fontFamily:"'JetBrains Mono',monospace"}}>✕ {cc} CANCELLED</div>}
-            {isToday&&<div style={{fontSize:"8px",fontWeight:800,letterSpacing:"1.2px",color:"#10b981",marginTop:"6px"}}>TODAY</div>}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 // ── Main App ─────────────────────────────────────────────────
+function readPersonLink(){
+  if(typeof window==="undefined") return null;
+  const p=new URLSearchParams(window.location.hash.slice(1));
+  const pm=(p.get("pm")||"").trim().toUpperCase();
+  if(pm) return {key:`pm:${pm}`,view:"pm"};
+  const person=(p.get("person")||"").trim();
+  if(person) return {key:rosterKey(person),view:"journeyman"};
+  return null;
+}
+
 export default function App(){
   const [weeksCache,setWeeksCache]=useState({[SAMPLE_SAT]:SAMPLE_DATA});
   const [currentWeekSat,setCurrentWeekSat]=useState(SAMPLE_SAT);
@@ -732,7 +131,13 @@ export default function App(){
   const [weekStatus,setWeekStatus]=useState({});
   // Schedule search: query + Day/Month scope + month view (jobs or a role) + open person.
   // Lives here so it survives switching tabs.
-  const [search,setSearch]=useState({query:"",scope:"day",view:"jobs",person:null,fromMonth:false});
+  // Deep links: #pm=D or #person=<roster name> open that person's month
+  // (PMs can bookmark their own link).
+  const [search,setSearch]=useState(()=>{
+    const base={query:"",scope:"day",view:"jobs",person:null,fromMonth:false};
+    const link=readPersonLink();
+    return link?{...base,scope:"month",view:link.view,person:link.key}:base;
+  });
   // Installer profiles — shared by the profiles editor and the Teams composer
   // so real names show up in messages without reloading the file each time.
   const [profiles,setProfiles]=useState(emptyStore());
@@ -751,6 +156,15 @@ export default function App(){
       window.history.replaceState(null,"",window.location.pathname+window.location.search);
     }
   },[tvMode]);
+  // Keep the address bar pointing at the open person/PM month so it can be bookmarked
+  useEffect(()=>{
+    if(tvMode) return;
+    const open=activeTab==="schedule"&&search.scope==="month"&&search.person;
+    const want=open?(search.person.startsWith("pm:")?`#pm=${encodeURIComponent(search.person.slice(3))}`:`#person=${encodeURIComponent(search.person)}`):"";
+    const curHash=window.location.hash;
+    if(want&&curHash!==want) window.history.replaceState(null,"",want);
+    else if(!want&&/^#(pm|person)=/.test(curHash)) window.history.replaceState(null,"",window.location.pathname+window.location.search);
+  },[tvMode,activeTab,search.scope,search.person]);
   function enterTV(){
     setTvMode(true);
     document.documentElement.requestFullscreen?.().catch(()=>{});
@@ -930,6 +344,16 @@ export default function App(){
     setActiveTab("schedule");
     setSearch(st=>({...st,scope:"month",fromMonth:false}));
   }
+  // From the roster: open someone's (or a PM's) whole month
+  function openPersonMonth(sel){
+    const ds=data[selectedDay]?.date;
+    const d=ds?new Date(ds+"T12:00:00"):new Date();
+    setMonthCursor(new Date(d.getFullYear(),d.getMonth(),1));
+    const key=sel.kind==="pm"?`pm:${sel.code}`:rosterKey(profileFor(profiles,sel.name)?.rosterName||sel.name);
+    setSearch(st=>({...st,query:"",scope:"month",view:sel.kind==="pm"?"pm":(sel.role||"journeyman"),person:key,fromMonth:false}));
+    setActiveTab("schedule");
+    window.scrollTo?.({top:0});
+  }
 
   // Changes made today, shown as a badge on the Changes tab
   const todayChangeCount=changeLog.filter(e=>new Date(e.ts).toDateString()===new Date().toDateString()).length;
@@ -972,7 +396,7 @@ export default function App(){
     {id:"people",l:"People",icon:"personCard"},
     {id:"send",l:"Send",icon:"paperplane"},
   ];
-  const weekNavTabs=activeTab==="week"||activeTab==="people"||activeTab==="send"||activeTab==="changes";
+  const weekNavTabs=activeTab==="week"||activeTab==="people"||activeTab==="send";
   const noWeekData=Object.keys(data).length===0;
   const stats=[{v:totalJobs,l:"Jobs"},{v:totalMen,l:"Men"},{v:totalTrucks,l:"Trucks"}];
 
@@ -1047,17 +471,18 @@ export default function App(){
                   <WeekStrip data={data} selectedDay={selectedDay} setSelectedDay={setSelectedDay} weekLabel={weekLabel}
                     onPrev={()=>navigateWeek(-1)} onNext={()=>navigateWeek(1)} onToday={goToCurrentWeek} showToday={currentWeekSat!==INITIAL_SAT}
                     loading={loadingWeek===currentWeekSat} isMobile={isMobile}/>
-                  <Panel><CrewRoster crews={cur?.crews} pools={cur?.pools} unavailable={cur?.unavailable} unassigned={cur?.unassigned} jobs={cur?.jobs} allData={data}/></Panel>
+                  <RosterTab crews={cur?.crews} pools={cur?.pools} unavailable={cur?.unavailable} unassigned={cur?.unassigned} jobs={cur?.jobs} allData={data}
+                    isMobile={isMobile} monthName={(cur?.date?new Date(cur.date+"T12:00:00"):new Date()).toLocaleDateString("en-US",{month:"long"})} onOpenMonth={openPersonMonth}/>
                 </>}
-                {activeTab==="week"&&<Panel><WeekOverview data={data} selectedDay={selectedDay} onSelectDay={d=>{setSelectedDay(d);setActiveTab("schedule");setSearch(st=>({...st,scope:"day"}));}}/></Panel>}
-                {activeTab==="month"&&<Panel><MonthCalendar weeksCache={weeksCache} monthCursor={monthCursor} setMonthCursor={setMonthCursor} onPickDay={pickCalendarDay} mode={mode} requestWeek={fetchWeek} isMobile={isMobile} onSearchMonth={searchMonth}/></Panel>}
-                {activeTab==="changes"&&<Panel><ChangeLogPanel changeLog={changeLog} onClear={()=>setChangeLog([])}/></Panel>}
-                {activeTab==="people"&&<Panel><Suspense fallback={<PanelFallback/>}>
+                {activeTab==="week"&&<WeekTab data={data} selectedDay={selectedDay} isMobile={isMobile} onSelectDay={d=>{setSelectedDay(d);setActiveTab("schedule");setSearch(st=>({...st,scope:"day",fromMonth:false}));}}/>}
+                {activeTab==="month"&&<MonthTab weeksCache={weeksCache} weekStatus={weekStatus} monthCursor={monthCursor} setMonthCursor={setMonthCursor} onPickDay={pickCalendarDay} mode={mode} requestWeek={fetchWeek} isMobile={isMobile} onSearchMonth={searchMonth}/>}
+                {activeTab==="changes"&&<ChangesTab changeLog={changeLog} onClear={()=>setChangeLog([])} isMobile={isMobile}/>}
+                {activeTab==="people"&&<Suspense fallback={<PanelFallback/>}>
                   <ProfilesPanel weekData={data} onStoreChange={setProfiles}/>
-                </Suspense></Panel>}
-                {activeTab==="send"&&<Panel><Suspense fallback={<PanelFallback/>}>
+                </Suspense>}
+                {activeTab==="send"&&<Suspense fallback={<PanelFallback/>}>
                   <TeamsMessagePanel weekData={data} selectedDay={selectedDay} profiles={profiles} weekLabel={getWeekLabel(data)}/>
-                </Suspense></Panel>}
+                </Suspense>}
               </>
         }
       </main>
@@ -1075,11 +500,6 @@ export default function App(){
       {isMobile&&<BottomNav tabs={TABS} activeTab={activeTab} setActiveTab={setActiveTab}/>}
     </div>
   );
-}
-
-// Rounded container for the tabs that haven't been redesigned yet
-function Panel({children}){
-  return <div style={{background:A.cell,borderRadius:12,padding:"18px"}}>{children}</div>;
 }
 
 function Legend(){

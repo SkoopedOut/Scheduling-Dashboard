@@ -4,40 +4,28 @@ import {
   upsertProfile, removeProfile, blankProfile, validateProfile, formatPhone,
   profileCompleteness, rosterKey, ROLES, ROLE_LABEL,
 } from './profiles.js';
-
-const S = {
-  panel: { background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', padding: '16px' },
-  input: {
-    background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.10)', borderRadius: '4px',
-    color: '#e2e8f0', padding: '6px 8px', fontSize: '12px', width: '100%', fontFamily: 'inherit',
-  },
-  label: { fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.6px', color: '#4a5568', marginBottom: '3px', display: 'block' },
-  btn: {
-    background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '4px',
-    color: '#e2e8f0', padding: '6px 12px', fontSize: '12px', cursor: 'pointer', fontFamily: 'inherit',
-  },
-  btnPrimary: {
-    background: 'rgba(74,158,255,0.16)', border: '1px solid rgba(74,158,255,0.45)', borderRadius: '4px',
-    color: '#4a9eff', padding: '6px 12px', fontSize: '12px', cursor: 'pointer', fontWeight: 600, fontFamily: 'inherit',
-  },
-};
+import { SYS } from './scheduleUtils.js';
+import { A, tint, Icon, Capsule, Avatar, Group, SectionFooter, SearchField, Segmented, ChipBar, TextInput, SelectField, FilledButton, GrayButton, PlainButton, Spinner, Ring, EmptyState } from './ui/apple.jsx';
 
 const ROLE_COLOR = {
-  foreman: '#f59e0b',
-  'apprentice-1': '#5ec490', 'apprentice-2': '#5ec490',
-  'apprentice-3': '#5ec490', 'apprentice-4': '#5ec490',
-  laborer: '#7eb8f7',
+  foreman: SYS.orange,
+  'apprentice-1': SYS.green, 'apprentice-2': SYS.green, 'apprentice-3': SYS.green, 'apprentice-4': SYS.green,
+  laborer: SYS.blue,
 };
 
 function RoleTag({ role }) {
-  if (!role) return <span style={{ color: '#555', fontSize: '11px' }}>— not set —</span>;
+  if (!role) return <span style={{ color: A.label3, fontSize: 13 }}>No role</span>;
+  return <Capsule color={ROLE_COLOR[role] || SYS.gray}>{ROLE_LABEL[role] || role}</Capsule>;
+}
+
+function Field({ label, hint, error, children, wide }) {
   return (
-    <span style={{
-      fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '3px',
-      background: (ROLE_COLOR[role] || '#666') + '22',
-      color: ROLE_COLOR[role] || '#aaa',
-      border: `1px solid ${(ROLE_COLOR[role] || '#666')}55`,
-    }}>{ROLE_LABEL[role] || role}</span>
+    <label style={{ display: 'block', gridColumn: wide ? '1 / -1' : undefined }}>
+      <span style={{ display: 'block', fontSize: 13, color: A.label2, marginBottom: 5 }}>{label}</span>
+      {children}
+      {error ? <span style={{ display: 'block', fontSize: 12, color: SYS.red, marginTop: 4 }}>{error}</span>
+        : hint && <span style={{ display: 'block', fontSize: 12, color: A.label3, marginTop: 4 }}>{hint}</span>}
+    </label>
   );
 }
 
@@ -51,102 +39,40 @@ function Editor({ profile, rosterInfo, onSave, onCancel, onDelete }) {
   const set = (k, v) => { setDraft(d => ({ ...d, [k]: v })); setTouched(true); };
 
   return (
-    <div style={{ ...S.panel, background: 'rgba(255,255,255,0.02)', marginTop: '8px' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px' }}>
-        <div>
-          <label style={S.label}>Name on the log book</label>
-          <input style={{ ...S.input, color: '#888' }} value={draft.rosterName} readOnly />
-          <div style={{ fontSize: '10px', color: '#666', marginTop: '3px' }}>
-            This is how the schedule spells it. It can't be changed here.
-          </div>
-        </div>
-
-        <div>
-          <label style={S.label}>Real name</label>
-          <input
-            style={S.input}
-            value={draft.displayName}
-            placeholder={draft.rosterName}
-            onChange={e => set('displayName', e.target.value)}
-          />
-          <div style={{ fontSize: '10px', color: '#666', marginTop: '3px' }}>
-            Fill this in when the log book uses a nickname.
-          </div>
-        </div>
-
-        <div>
-          <label style={S.label}>Role</label>
-          <select style={S.input} value={draft.role} onChange={e => set('role', e.target.value)}>
-            <option value="">— not set —</option>
+    <div className="ap-fade" style={{ background: A.cell2, borderRadius: 12, padding: 16, margin: '0 0 14px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 14 }}>
+        <Field label="Name on the log book" hint="How the schedule spells it. Can’t be changed here."><TextInput value={draft.rosterName} readOnly /></Field>
+        <Field label="Real name" hint="Fill in when the log book uses a nickname."><TextInput value={draft.displayName} placeholder={draft.rosterName} onChange={v => set('displayName', v)} /></Field>
+        <Field label="Role">
+          <SelectField value={draft.role} onChange={v => set('role', v)} ariaLabel="Role">
+            <option value="">Not set</option>
             {ROLES.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
-          </select>
-        </div>
-
-        <div>
-          <label style={S.label}>Phone</label>
-          <input
-            style={{ ...S.input, borderColor: errors.phone ? '#ef4444' : '#333' }}
-            value={draft.phone}
-            placeholder="(978) 555-0134"
-            onChange={e => set('phone', e.target.value)}
-            onBlur={e => set('phone', formatPhone(e.target.value))}
-          />
-          {errors.phone && <div style={{ fontSize: '10px', color: '#ef4444', marginTop: '3px' }}>{errors.phone}</div>}
-        </div>
-
-        <div>
-          <label style={S.label}>Teams email</label>
-          <input
-            style={{ ...S.input, borderColor: errors.teamsEmail ? '#ef4444' : '#333' }}
-            value={draft.teamsEmail}
-            placeholder="name@hubofficeinc.com"
-            onChange={e => set('teamsEmail', e.target.value)}
-          />
-          {errors.teamsEmail && <div style={{ fontSize: '10px', color: '#ef4444', marginTop: '3px' }}>{errors.teamsEmail}</div>}
-        </div>
-
-        <div>
-          <label style={S.label}>Other spellings</label>
-          <input
-            style={S.input}
-            value={(draft.aliases || []).join(', ')}
-            placeholder="Mike, Mikey"
-            onChange={e => set('aliases', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
-          />
-          <div style={{ fontSize: '10px', color: '#666', marginTop: '3px' }}>
-            Separate with commas. Use for job-row spellings that don't match.
-          </div>
-        </div>
-      </div>
-
-      <div style={{ marginTop: '12px' }}>
-        <label style={S.label}>Notes</label>
-        <input style={S.input} value={draft.notes} onChange={e => set('notes', e.target.value)} />
+          </SelectField>
+        </Field>
+        <Field label="Phone" error={errors.phone}><TextInput type="tel" value={draft.phone} placeholder="(978) 555-0134" invalid={!!errors.phone} onChange={v => set('phone', v)} onBlur={e => set('phone', formatPhone(e.target.value))} /></Field>
+        <Field label="Teams email" error={errors.teamsEmail}><TextInput type="email" value={draft.teamsEmail} placeholder="name@hubofficeinc.com" invalid={!!errors.teamsEmail} onChange={v => set('teamsEmail', v)} /></Field>
+        <Field label="Other spellings" hint="Separate with commas — for job-row spellings that don’t match.">
+          <TextInput value={(draft.aliases || []).join(', ')} placeholder="Mike, Mikey" onChange={v => set('aliases', v.split(',').map(x => x.trim()).filter(Boolean))} />
+        </Field>
+        <Field label="Notes" wide><TextInput value={draft.notes} onChange={v => set('notes', v)} /></Field>
       </div>
 
       {rosterInfo && (
-        <div style={{ fontSize: '11px', color: '#777', marginTop: '10px' }}>
-          On the schedule {rosterInfo.days.length} day{rosterInfo.days.length === 1 ? '' : 's'} this week
-          {rosterInfo.onJobs ? `, assigned to ${rosterInfo.onJobs} job${rosterInfo.onJobs === 1 ? '' : 's'}` : ''}
+        <div style={{ fontSize: 13, color: A.label2, marginTop: 14 }}>
+          On the schedule {rosterInfo.days.length} {rosterInfo.days.length === 1 ? 'day' : 'days'} this week
+          {rosterInfo.onJobs ? `, on ${rosterInfo.onJobs} ${rosterInfo.onJobs === 1 ? 'job' : 'jobs'}` : ''}
           {rosterInfo.crews.length ? ` · Crew: ${rosterInfo.crews.join(', ')}` : ''}
           {rosterInfo.pools.length ? ` · Pool: ${rosterInfo.pools.join(', ')}` : ''}
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: '8px', marginTop: '14px', alignItems: 'center' }}>
-        <button
-          style={{ ...S.btnPrimary, opacity: hasErrors ? 0.5 : 1, cursor: hasErrors ? 'not-allowed' : 'pointer' }}
-          disabled={hasErrors}
-          onClick={() => onSave(draft)}
-        >Save profile</button>
-        <button style={S.btn} onClick={onCancel}>Cancel</button>
+      <div style={{ display: 'flex', gap: 10, marginTop: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+        <FilledButton disabled={hasErrors} onClick={() => onSave(draft)}>Save profile</FilledButton>
+        <GrayButton onClick={onCancel}>Cancel</GrayButton>
+        {touched && <span style={{ fontSize: 13, color: SYS.orange }}>Unsaved changes</span>}
         <div style={{ flex: 1 }} />
-        <button
-          style={{ ...S.btn, color: '#ef4444', borderColor: '#5a2020' }}
-          onClick={() => onDelete(draft.rosterName)}
-        >Remove</button>
+        <PlainButton color={SYS.red} onClick={() => { if (window.confirm(`Remove ${draft.rosterName}’s profile?`)) onDelete(draft.rosterName); }}><Icon name="trash" size={16} weight={2} />Remove</PlainButton>
       </div>
-      {touched && <div style={{ fontSize: '10px', color: '#f59e0b', marginTop: '8px' }}>Unsaved changes</div>}
     </div>
   );
 }
@@ -260,128 +186,95 @@ export default function ProfilesPanel({ weekData, onClose, onStoreChange }) {
 
   const unmatched = rosterNames.unmatchedJobNames || [];
 
+  const isNarrow = typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches;
+  const filters = [{ id: 'all', label: 'Everyone' }, { id: 'incomplete', label: 'Missing details' }, { id: 'noprofile', label: 'No profile' }, { id: 'foremen', label: 'Foremen' }];
+
   return (
-    <div style={{ padding: '16px', maxWidth: '1100px', margin: '0 auto' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '14px', flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0, fontSize: '16px', color: '#e2e8f0' }}>Installer profiles</h2>
-        <span style={{ fontSize: '11px', color: '#888' }}>
-          {stats.complete} of {stats.total} complete · {stats.withProfile} have a profile
-        </span>
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16, flexWrap: 'wrap' }}>
+        <Ring value={stats.complete} total={stats.total || 1} color={SYS.green} size={46} stroke={5}>{stats.total ? Math.round((stats.complete / stats.total) * 100) : 0}%</Ring>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-0.01em' }}>Installer profiles</div>
+          <div className="tnum" style={{ fontSize: 13, color: A.label2 }}>{stats.complete} of {stats.total} complete · {stats.withProfile} have a profile</div>
+        </div>
         <div style={{ flex: 1 }} />
-        {dirty && <span style={{ fontSize: '11px', color: '#f59e0b' }}>Unsaved changes</span>}
-        <button style={S.btn} onClick={reload} disabled={status === 'saving'}>Reload</button>
-        <button
-          style={{ ...S.btnPrimary, opacity: dirty && status !== 'saving' ? 1 : 0.5 }}
-          disabled={!dirty || status === 'saving'}
-          onClick={persist}
-        >{status === 'saving' ? 'Saving…' : 'Save to SharePoint'}</button>
-        {onClose && <button style={S.btn} onClick={onClose}>Close</button>}
+        {dirty && <span style={{ fontSize: 13, color: SYS.orange }}>Unsaved changes</span>}
+        <GrayButton onClick={reload} disabled={status === 'saving'}><Icon name="refresh" size={15} weight={2.2} />Reload</GrayButton>
+        <FilledButton disabled={!dirty || status === 'saving'} onClick={persist}>{status === 'saving' ? <><Spinner size={14} color="#fff" />Saving…</> : 'Save to SharePoint'}</FilledButton>
+        {onClose && <GrayButton onClick={onClose}>Close</GrayButton>}
       </div>
 
       {error && (
-        <div style={{ ...S.panel, borderColor: '#5a2020', background: '#1e1414', marginBottom: '12px', color: '#f8b4b4', fontSize: '12px' }}>
-          {error}
-        </div>
+        <div role="alert" style={{ background: tint(SYS.red, 0.14), color: SYS.red, borderRadius: 12, padding: '11px 14px', fontSize: 14, marginBottom: 14 }}>{error}</div>
       )}
 
-      {status === 'loading' && <div style={{ color: '#888', fontSize: '13px' }}>Loading profiles…</div>}
+      {status === 'loading' && <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: A.label2, fontSize: 14, padding: '20px 0' }}><Spinner size={16} />Loading profiles…</div>}
 
       {status !== 'loading' && (
         <>
-          <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
-            <input
-              style={{ ...S.input, width: '220px' }}
-              placeholder="Search names"
-              value={filter}
-              onChange={e => setFilter(e.target.value)}
-            />
-            <select style={{ ...S.input, width: 'auto' }} value={showOnly} onChange={e => setShowOnly(e.target.value)}>
-              <option value="all">Everyone</option>
-              <option value="incomplete">Missing details</option>
-              <option value="noprofile">No profile yet</option>
-              <option value="foremen">Foremen</option>
-            </select>
-            <button style={S.btn} onClick={addMissing}>
-              Add everyone on this week's schedule
-            </button>
+          <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+            <div style={{ flex: '1 1 240px', maxWidth: isNarrow ? 'none' : 340, display: 'flex' }}>
+              <SearchField value={filter} onChange={setFilter} placeholder="Search names or emails" />
+            </div>
+            {isNarrow
+              ? <div style={{ width: '100%' }}><ChipBar options={filters} value={showOnly} onChange={setShowOnly} ariaLabel="Show" /></div>
+              : <Segmented options={filters} value={showOnly} onChange={setShowOnly} ariaLabel="Show" style={{ width: 460 }} />}
+            <PlainButton onClick={addMissing}><Icon name="plus" size={16} weight={2.4} />Add everyone on this week’s schedule</PlainButton>
           </div>
 
           {unmatched.length > 0 && (
-            <div style={{ ...S.panel, marginBottom: '12px', borderColor: '#4a3a1a', background: '#1a1610' }}>
-              <div style={{ fontSize: '12px', color: '#f59e0b', fontWeight: 600, marginBottom: '6px' }}>
-                Job rows use {unmatched.length} spelling{unmatched.length === 1 ? '' : 's'} that don't match the crew list
+            <div style={{ background: tint(SYS.orange, 0.12), borderRadius: 12, padding: '12px 14px', marginBottom: 14 }}>
+              <div style={{ fontSize: 15, color: SYS.orange, fontWeight: 600, marginBottom: 4 }}>
+                Job rows use {unmatched.length} {unmatched.length === 1 ? 'spelling' : 'spellings'} that don’t match the crew list
               </div>
-              <div style={{ fontSize: '11px', color: '#aaa' }}>
-                {unmatched.map(u => `${u.name} (${u.count}×)`).join(', ')}
-              </div>
-              <div style={{ fontSize: '11px', color: '#777', marginTop: '6px' }}>
-                Add each one under "Other spellings" on the right person so their jobs count correctly.
-              </div>
+              <div style={{ fontSize: 13, color: A.label }}>{unmatched.map(u => `${u.name} (${u.count}×)`).join(', ')}</div>
+              <div style={{ fontSize: 13, color: A.label2, marginTop: 4 }}>Add each one under “Other spellings” on the right person so their jobs count correctly.</div>
             </div>
           )}
 
-          <div style={{ ...S.panel, padding: 0, overflow: 'hidden' }}>
-            {rows.length === 0 && (
-              <div style={{ padding: '24px', textAlign: 'center', color: '#777', fontSize: '13px' }}>
-                No one matches that search.
-              </div>
-            )}
-            {rows.map(row => {
+          <Group>
+            {rows.length === 0 && <EmptyState icon="search" title="No one matches">Try a different name or filter.</EmptyState>}
+            {rows.map((row, i) => {
               const p = row.profile;
               const isEditing = editing === row.key;
+              const comp = p ? profileCompleteness(p) : null;
               return (
-                <div key={row.key} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'minmax(120px,1.2fr) minmax(120px,1.2fr) auto minmax(110px,1fr) minmax(150px,1.4fr) auto',
-                      gap: '10px', alignItems: 'center', padding: '10px 12px', cursor: 'pointer',
-                      background: isEditing ? 'rgba(74,158,255,0.05)' : 'transparent',
-                    }}
-                    onClick={() => setEditing(isEditing ? null : row.key)}
-                  >
-                    <div style={{ fontSize: '13px', color: '#e2e8f0', fontWeight: 600 }}>
-                      {row.name}
-                      {row.roster?.seenAsForeman && (
-                        <span style={{ fontSize: '9px', color: '#f59e0b', marginLeft: '6px' }}>FOREMAN</span>
-                      )}
-                      {!row.roster && (
-                        <span style={{ fontSize: '9px', color: '#666', marginLeft: '6px' }}>NOT THIS WEEK</span>
-                      )}
+                <div key={row.key}>
+                  <button type="button" onClick={() => setEditing(isEditing ? null : row.key)} aria-expanded={isEditing} className="ap-btn ap-row ap-tap" style={{
+                    display: 'flex', alignItems: 'center', gap: 12, width: '100%', padding: '0 16px', background: isEditing ? A.fill4 : 'transparent', border: 'none', color: 'inherit', textAlign: 'left' }}>
+                    <Avatar name={p?.displayName || row.name} size={36} color={row.roster?.seenAsForeman || p?.role === 'foreman' ? SYS.orange : null} />
+                    <div style={{ flex: 1, minWidth: 0, display: 'grid', gridTemplateColumns: isNarrow ? '1fr auto' : 'minmax(160px,1.3fr) 130px minmax(120px,1fr) minmax(170px,1.4fr) 40px', gap: 12, alignItems: 'center', padding: '10px 0', borderTop: i ? `0.5px solid ${A.sep}` : 'none' }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 15, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          {row.name}
+                          {row.roster?.seenAsForeman && <Capsule color={SYS.orange} size={10}>Foreman</Capsule>}
+                          {!row.roster && <Capsule color={SYS.gray} size={10}>Not this week</Capsule>}
+                        </div>
+                        <div style={{ fontSize: 13, color: p?.displayName ? A.label2 : A.label3 }}>{p?.displayName || 'No real name'}</div>
+                      </div>
+                      {isNarrow
+                        ? <span className="tnum" style={{ fontSize: 13, color: A.label3 }}>{comp ? `${comp.filled}/4` : 'New'}</span>
+                        : <>
+                            <div><RoleTag role={p?.role} /></div>
+                            <div className="tnum" style={{ fontSize: 13, color: p?.phone ? A.label : A.label3 }}>{p?.phone ? formatPhone(p.phone) : 'No phone'}</div>
+                            <div style={{ fontSize: 13, color: p?.teamsEmail ? A.label : A.label3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p?.teamsEmail || 'No Teams email'}</div>
+                            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                              {comp ? <Ring value={comp.filled} total={4} color={comp.complete ? SYS.green : SYS.orange} size={28} stroke={3}>{comp.filled}</Ring> : <span style={{ fontSize: 12, color: A.label3 }}>New</span>}
+                            </div>
+                          </>}
                     </div>
-                    <div style={{ fontSize: '12px', color: p?.displayName ? '#bbb' : '#555' }}>
-                      {p?.displayName || '—'}
-                    </div>
-                    <div><RoleTag role={p?.role} /></div>
-                    <div style={{ fontSize: '12px', color: p?.phone ? '#bbb' : '#555', fontVariantNumeric: 'tabular-nums' }}>
-                      {p?.phone ? formatPhone(p.phone) : '—'}
-                    </div>
-                    <div style={{ fontSize: '12px', color: p?.teamsEmail ? '#bbb' : '#555', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {p?.teamsEmail || '—'}
-                    </div>
-                    <div style={{ fontSize: '11px', color: '#666' }}>
-                      {p ? `${profileCompleteness(p).filled}/4` : 'new'}
-                    </div>
-                  </div>
+                  </button>
                   {isEditing && (
-                    <div style={{ padding: '0 12px 12px' }}>
-                      <Editor
-                        profile={p || blankProfile(row.name)}
-                        rosterInfo={row.roster}
-                        onSave={handleSave}
-                        onCancel={() => setEditing(null)}
-                        onDelete={handleDelete}
-                      />
+                    <div style={{ padding: '4px 16px 0' }}>
+                      <Editor profile={p || blankProfile(row.name)} rosterInfo={row.roster} onSave={handleSave} onCancel={() => setEditing(null)} onDelete={handleDelete} />
                     </div>
                   )}
                 </div>
               );
             })}
-          </div>
+          </Group>
 
-          <div style={{ fontSize: '11px', color: '#666', marginTop: '10px' }}>
-            Saved to Documents/Schedule/installers.json in SharePoint. Changes aren't live until you save.
-          </div>
+          <SectionFooter>Saved to Documents/Schedule/installers.json in SharePoint. Changes aren’t live until you choose Save to SharePoint. The ring shows how many of name, role, phone and Teams email are filled in.</SectionFooter>
         </>
       )}
     </div>
