@@ -6,6 +6,7 @@ import { useEffect, useRef } from 'react';
 import { DAY_ORDER, SYS, todayIso } from './scheduleUtils.js';
 import { A, Icon, Segmented, SearchField, CircleButton, PlainButton, Spinner } from './ui/apple.jsx';
 import DayJobs from './DayJobs.jsx';
+import { EditBar } from './editing/WeekEditing.jsx';
 import MonthSearch from './MonthSearch.jsx';
 
 // ── Calendar-style week strip (shared with the Roster tab) ───
@@ -52,7 +53,7 @@ export function WeekStrip({ data, selectedDay, setSelectedDay, weekLabel, onPrev
 export default function SchedulePage({
   data, weeksCache, currentWeekSat, weekLabel, selectedDay, setSelectedDay, onPrevWeek, onNextWeek, onToday, isCurrentWeek,
   loadingWeek, flashedJobs, isMobile, mode, profiles, weekStatus, requestWeek, monthCursor, setMonthCursor,
-  search, setSearch, onOpenDay,
+  search, setSearch, onOpenDay, editor,
 }) {
   const inputRef = useRef(null);
   const cur = data?.[selectedDay];
@@ -114,8 +115,10 @@ export default function SchedulePage({
               <span style={{ fontSize: isMobile ? 15 : 17, color: A.label2 }}>{new Date(cur.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</span>
             </div>
           )}
+          {editor && <EditBar dayName={selectedDay} notes={cur?.notes} saveState={editor.saveState} isMobile={isMobile}
+            onAddJob={editor.onAddJob} onEditRoster={editor.onEditRoster} onEditNotes={editor.onEditNotes} />}
           <DayJobs dayData={cur} flashedJobs={flashedJobs} weeksCache={weeksCache} curSatKey={currentWeekSat}
-            query={search.query} isMobile={isMobile} onSearchMonth={() => setScope('month')} />
+            query={search.query} isMobile={isMobile} onSearchMonth={() => setScope('month')} onEditJob={editor?.onEditJob} />
         </>
       ) : (
         <MonthSearch weeksCache={weeksCache} weekStatus={weekStatus} requestWeek={requestWeek} mode={mode} profiles={profiles}

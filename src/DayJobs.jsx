@@ -70,6 +70,16 @@ function IssueRow({ icon, color, title, children, last }) {
 }
 
 // Calendar-style colored bar at the leading edge of a job
+function EditButton({ onClick, label }) {
+  return (
+    <button type="button" onClick={onClick} aria-label={label} title="Edit job" className="ap-btn ap-press" style={{
+      width: 30, height: 30, borderRadius: '50%', border: 'none', background: A.fill3, color: A.tint, cursor: 'pointer',
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+      <Icon name="pencil" size={15} weight={2} />
+    </button>
+  );
+}
+
 function AccentBar({ color, height = 34 }) {
   return <span aria-hidden style={{ width: 4, height, borderRadius: 2, background: color, flexShrink: 0 }} />;
 }
@@ -80,7 +90,7 @@ function jobMeta(job) {
   return bits.join('  ·  ');
 }
 
-export default function DayJobs({ dayData, flashedJobs, weeksCache, curSatKey, query, isMobile, onSearchMonth }) {
+export default function DayJobs({ dayData, flashedJobs, weeksCache, curSatKey, query, isMobile, onSearchMonth, onEditJob }) {
   const [hlPerson, setHlPerson] = useState(null);
   useEffect(() => { setHlPerson(null); }, [dayData?.day, dayData?.date]);
 
@@ -88,7 +98,7 @@ export default function DayJobs({ dayData, flashedJobs, weeksCache, curSatKey, q
     <Group style={{ padding: '48px 20px', textAlign: 'center' }}>
       <div style={{ color: A.label3, display: 'flex', justifyContent: 'center', marginBottom: 10 }}><Icon name="calendar" size={34} weight={1.5} /></div>
       <div style={{ fontSize: 17, fontWeight: 600, color: A.label }}>No jobs scheduled</div>
-      <div style={{ fontSize: 14, color: A.label2, marginTop: 4 }}>Nothing is on the log book for this day.</div>
+      <div style={{ fontSize: 14, color: A.label2, marginTop: 4 }}>{onEditJob ? 'Use Add job to put one on the schedule.' : 'Nothing is on the log book for this day.'}</div>
     </Group>
   );
 
@@ -132,7 +142,7 @@ export default function DayJobs({ dayData, flashedJobs, weeksCache, curSatKey, q
     { key: 'x', title: 'Cancelled', note: 'Struck through in the log book', jobs: cancelledJobs },
   ].filter(s => s.jobs.length);
 
-  const rowProps = { dayData, flashedJobs, newIds, movedCrew, multiCounts, hlPerson, togglePerson, isForeman, colorOf, q };
+  const rowProps = { dayData, flashedJobs, newIds, movedCrew, multiCounts, hlPerson, togglePerson, isForeman, colorOf, q, onEditJob };
 
   return (
     <div>
@@ -294,7 +304,12 @@ function JobRow({ job, first, ...p }) {
           : <CrewChips crew={job.crew} {...p} />}
       </td>
       <td style={{ ...td, textAlign: 'center' }}><PMBadge initials={job.calledIn} /></td>
-      <td style={{ ...td, paddingRight: 16 }}><FolderIcon val={job.jobFolder} /></td>
+      <td style={{ ...td, paddingRight: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+          <FolderIcon val={job.jobFolder} />
+          {p.onEditJob && <EditButton onClick={() => p.onEditJob(job)} label={`Edit #${job.num} ${job.customer}`} />}
+        </div>
+      </td>
     </tr>
   );
 }
@@ -317,6 +332,7 @@ function JobCell({ job, first, ...p }) {
           <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
             {(job.jobFolder || '') !== '' && (job.jobFolder || '') !== 'n' && <FolderIcon val={job.jobFolder} />}
             <PMBadge initials={job.calledIn} size="sm" />
+            {p.onEditJob && <EditButton onClick={() => p.onEditJob(job)} label={`Edit #${job.num} ${job.customer}`} />}
           </span>
         </div>
         <div style={{ fontSize: 17, fontWeight: 600, marginTop: 3, textDecoration: s.isCancelled ? 'line-through' : 'none' }}><Highlight text={job.customer} q={p.q} /></div>
