@@ -70,6 +70,21 @@ function IssueRow({ icon, color, title, children, last }) {
 }
 
 // Calendar-style colored bar at the leading edge of a job
+// First lines of a job's notes; opens the Notes tab when editable
+function JobNote({ job, p }) {
+  if (!job.notes) return null;
+  const body = (
+    <span style={{ display: 'flex', gap: 6, alignItems: 'flex-start', textAlign: 'left' }}>
+      <Icon name="doc" size={13} weight={2} style={{ marginTop: 2, color: A.label2 }} />
+      <span style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', whiteSpace: 'pre-wrap' }}><Highlight text={job.notes} q={p.q} /></span>
+    </span>
+  );
+  const style = { marginTop: 6, fontSize: 13, color: A.label2, lineHeight: 1.4, background: A.fill4, borderRadius: 8, padding: '5px 8px', border: 'none', width: '100%', display: 'block' };
+  return p.onEditJob
+    ? <button type="button" onClick={() => p.onEditJob(job, 'notes')} className="ap-btn ap-press" title="Open job notes" style={{ ...style, cursor: 'pointer', color: A.label2, font: 'inherit', fontSize: 13 }}>{body}</button>
+    : <div style={style}>{body}</div>;
+}
+
 function EditButton({ onClick, label }) {
   return (
     <button type="button" onClick={onClick} aria-label={label} title="Edit job" className="ap-btn ap-press" style={{
@@ -292,6 +307,7 @@ function JobRow({ job, first, ...p }) {
         </div>
         <div style={{ fontSize: 13, color: A.label2, marginTop: 2, lineHeight: 1.35 }}>{job.location ? <Highlight text={job.location} q={p.q} /> : <span style={{ color: A.label3 }}>No location</span>}</div>
         <div className="tnum" style={{ fontSize: 12, color: A.label3, marginTop: 3 }}><Highlight text={jobMeta(job)} q={p.q} /></div>
+        <JobNote job={job} p={p} />
       </td>
       <td style={{ ...td, fontSize: 13, color: hasTruck(job.trucks) ? A.label2 : A.label3 }}>{hasTruck(job.trucks) ? job.trucks : '–'}</td>
       <td style={{ ...td, textAlign: 'center' }}>
@@ -337,6 +353,7 @@ function JobCell({ job, first, ...p }) {
         </div>
         <div style={{ fontSize: 17, fontWeight: 600, marginTop: 3, textDecoration: s.isCancelled ? 'line-through' : 'none' }}><Highlight text={job.customer} q={p.q} /></div>
         {job.location && <div style={{ fontSize: 15, color: A.label2, marginTop: 1 }}><Highlight text={job.location} q={p.q} /></div>}
+        <JobNote job={job} p={p} />
         <div className="tnum" style={{ fontSize: 13, color: A.label3, marginTop: 4, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
           <span><Highlight text={jobMeta(job)} q={p.q} /></span>
           {hasTruck(job.trucks) && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="truck" size={14} weight={1.9} />{job.trucks}</span>}

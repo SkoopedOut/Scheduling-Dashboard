@@ -43,18 +43,10 @@ export function deleteJob(week, dayName, id) {
   return week;
 }
 
-// applyTo: 'day' | 'rest' (this day through Saturday) | 'week'
-export function setRoster(week, dayName, roster, applyTo = 'day') {
-  const idx = DAY_ORDER.indexOf(dayName);
-  const targets = applyTo === 'week' ? DAY_ORDER : applyTo === 'rest' ? DAY_ORDER.slice(idx) : [dayName];
-  for (const d of targets) {
-    if (!week[d]) continue;
-    const r = JSON.parse(JSON.stringify(roster));
-    week[d].crews = r.crews;
-    week[d].pools = r.pools;
-    week[d].unavailable = r.unavailable;
-    week[d].unassigned = r.unassigned;
-  }
+// Who is out on a day (and optionally the same people on other days)
+//   out: [{ name, reason: 'out' | 'crossed out' }]
+export function setOut(week, dayName, out, alsoDays = []) {
+  for (const d of [dayName, ...alsoDays]) if (week[d]) week[d].out = JSON.parse(JSON.stringify(out));
   return week;
 }
 
@@ -63,58 +55,34 @@ export function setNotes(week, dayName, notes) {
   return week;
 }
 
-// ── Roster editor model ──────────────────────────────────────
-// The saved shape keeps out / crossed-out people in `unavailable`; the
-// editor shows everyone in place with a status instead.
-//   status: 'in' | 'out' (vacation / injured) | 'struck' (crossed out)
-export function rosterToEditor(day) {
-  const crews = Object.entries(day?.crews || {}).map(([foreman, c]) => ({
-    key: newId(), foreman, qual: c.qual || '',
-    members: (c.members || []).map(m => ({ key: newId(), name: m.name, qual: m.qual || '', status: 'in' })),
-  }));
-  const pools = {};
-  for (const p of ['laborers', 'drivers', 'extra']) pools[p] = (day?.pools?.[p] || []).map(m => ({ key: newId(), name: m.name, status: 'in' }));
-  const unassigned = (day?.unassigned || []).map(m => ({ key: newId(), name: m.name, status: 'in' }));
-  for (const u of day?.unavailable || []) {
-    const status = u.reason === 'crossed out' ? 'struck' : 'out';
-    const crew = u.foreman && crews.find(c => c.foreman === u.foreman);
-    const entry = { key: newId(), name: u.name, qual: u.qual || '', status };
-    if (crew) crew.members.push(entry);
-    else if (u.pool && pools[u.pool]) pools[u.pool].push(entry);
-    else unassigned.push(entry);
-  }
-  return { crews, pools, unassigned };
+// ── Roster editor model (global roster) ─────────────────────
+export function rosterToModel(roster) {
+  const k = () => newId();
+  return {
+    crews: (roster?.crews || []).map(c => ({ key: k(), foreman: c.foreman, qual: c.qual || '', members: (c.members || []).map(m => ({ key: k(), name: m.name, qual: m.qual || '' })) })),
+    pools: Object.fromEntries(['laborers', 'drivers', 'extra'].map(p => [p, (roster?.pools?.[p] || []).map(m => ({ key: k(), name: m.name }))])),
+    unassigned: (roster?.unassigned || []).map(m => ({ key: k(), name: m.name })),
+  };
 }
 
-export function editorToRoster(model) {
-  const crews = {}, unavailable = [];
-  for (const c of model.crews) {
-    const f = c.foreman.trim();
-    if (!f) continue;
-    const members = [];
-    for (const m of c.members) {
-      const name = m.name.trim();
-      if (!name) continue;
-      if (m.status === 'in') members.push({ name, qual: m.qual || null });
-      else unavailable.push({ name, foreman: f, qual: m.qual || null, reason: m.status === 'struck' ? 'crossed out' : 'listed above crew' });
-    }
-    crews[f] = { members, qual: c.qual || null };
+export function modelToRoster(model) {
+  const t = s => String(s || '').trim();
+  return {
+    crews: model.crews.filter(c => t(c.foreman)).map(c => ({ foreman: t(c.foreman), qual: c.qual || null, members: c.members.filter(m => t(m.name)).map(m => ({ name: t(m.name), qual: m.qual || null })) })),
+    pools: Object.fromEntries(['laborers', 'drivers', 'extra'].map(p => [p, (model.pools[p] || []).filter(m => t(m.name)).map(m => ({ name: t(m.name) }))])),
+    unassigned: model.unassigned.filter(m => t(m.name)).map(m => ({ name: t(m.name) })),
+  };
+}
+
+// Everyone on the roster, for the "who's out" list
+export function rosterPeople(roster) {
+  const out = [];
+  for (const c of roster?.crews || []) {
+    out.push({ name: c.foreman, group: c.foreman, foreman: true });
+    for (const m of c.members || []) out.push({ name: m.name, group: c.foreman });
   }
-  const pools = { laborers: [], drivers: [], extra: [] };
-  for (const p of Object.keys(pools)) {
-    for (const m of model.pools[p] || []) {
-      const name = m.name.trim();
-      if (!name) continue;
-      if (m.status === 'in') pools[p].push({ name });
-      else unavailable.push({ name, foreman: null, pool: p, reason: m.status === 'struck' ? 'crossed out' : 'out' });
-    }
-  }
-  const unassigned = [];
-  for (const m of model.unassigned) {
-    const name = m.name.trim();
-    if (!name) continue;
-    if (m.status === 'in') unassigned.push({ name });
-    else unavailable.push({ name, foreman: null, reason: m.status === 'struck' ? 'crossed out' : 'out' });
-  }
-  return { crews, pools, unavailable, unassigned };
+  const titles = { laborers: 'Laborers', drivers: 'Drivers', extra: 'Extra' };
+  for (const p of Object.keys(titles)) for (const m of roster?.pools?.[p] || []) out.push({ name: m.name, group: titles[p] });
+  for (const m of roster?.unassigned || []) out.push({ name: m.name, group: 'Unassigned' });
+  return out;
 }

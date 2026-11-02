@@ -12,6 +12,11 @@
 //
 //   Documents/Schedule/Backup Log Books/2027/01 January 27/1-9-2027 Log Book.xlsx
 //
+// The roster is one global file every week reads, so a roster change
+// applies everywhere; each day only stores who is out that day:
+//
+//   Documents/Schedule/Site Data/roster.json
+//
 // Weeks ending in 2026 or earlier keep reading the Excel log books.
 // ============================================================
 import ExcelJS from 'exceljs';
@@ -23,6 +28,7 @@ export const DATA_FOLDER = 'Schedule/Site Data';
 export const BACKUP_FOLDER = 'Schedule/Backup Log Books';
 export const STORE_VERSION = 1;
 const WRITE_SCOPES = ['Files.ReadWrite.All'];
+export const ROSTER_PATH = `${DATA_FOLDER}/roster.json`;
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 const SHAREPOINT_SITE_URL = 'hubofficeinc.sharepoint.com:/sites/SchedulingTeam';
@@ -70,32 +76,71 @@ function cleanJob(j) {
     cancelled: !!j.cancelled,
     trash: j.trash ?? null,
     driverReturn: j.driverReturn ?? null,
+    notes: j.notes ?? '',
   };
 }
 
-export function emptyDay(day, date) {
-  return { day, date, jobs: [], crews: {}, pools: { laborers: [], drivers: [], extra: [] }, unavailable: [], unassigned: [], notes: '' };
+export function emptyRoster() {
+  return { crews: [], pools: { laborers: [], drivers: [], extra: [] }, unassigned: [] };
 }
 
-function normalizeDay(day, date, d = {}) {
+const norm = s => String(s || '').trim().toLowerCase();
+
+// What each day stores: its jobs, who's out that day, and notes. The
+// roster itself is one global file (roster.json) shared by every week.
+function dayRecord(d = {}) {
+  const out = Array.isArray(d.out) ? d.out
+    : (d.unavailable || []).map(u => ({ name: u.name, reason: u.reason === 'crossed out' ? 'crossed out' : 'out' }));
   return {
-    day, date,
     jobs: (d.jobs || []).map(cleanJob).sort((a, b) => (a.num ?? 999) - (b.num ?? 999)),
-    crews: d.crews || {},
-    pools: { laborers: d.pools?.laborers || [], drivers: d.pools?.drivers || [], extra: d.pools?.extra || [] },
-    unavailable: d.unavailable || [],
-    unassigned: d.unassigned || [],
+    out: out.filter(o => o && String(o.name || '').trim()).map(o => ({ name: String(o.name).trim(), reason: o.reason === 'crossed out' ? 'crossed out' : 'out' })),
     notes: d.notes || '',
   };
 }
 
-// Week object in the same shape the Excel parser returns ({Sunday:{…},…}).
-export function normalizeWeek(satKey, days = {}) {
+// Global roster + one day's record -> the parser-shaped day the rest of
+// the app uses (crews minus anyone out, unavailable list, pools…).
+export function composeDay(roster, day, date, d = {}) {
+  const rec = dayRecord(d);
+  const outBy = new Map(rec.out.map(o => [norm(o.name), o]));
+  const used = new Set();
+  const unavailable = [];
+  const take = (name, extra, outReason) => {
+    const o = outBy.get(norm(name));
+    if (!o) return false;
+    used.add(norm(name));
+    unavailable.push({ name, ...extra, reason: o.reason === 'crossed out' ? 'crossed out' : outReason });
+    return true;
+  };
+  const crews = {};
+  for (const c of roster?.crews || []) {
+    const f = String(c.foreman || '').trim();
+    if (!f) continue;
+    take(f, { foreman: f, qual: c.qual || null }, 'listed above crew');
+    const members = [];
+    for (const m of c.members || []) {
+      if (!take(m.name, { foreman: f, qual: m.qual || null }, 'listed above crew')) members.push({ name: m.name, qual: m.qual || null });
+    }
+    crews[f] = { members, qual: c.qual || null };
+  }
+  const pools = { laborers: [], drivers: [], extra: [] };
+  for (const p of Object.keys(pools)) {
+    for (const m of roster?.pools?.[p] || []) if (!take(m.name, { foreman: null, pool: p }, 'out')) pools[p].push({ name: m.name });
+  }
+  const unassigned = [];
+  for (const m of roster?.unassigned || []) if (!take(m.name, { foreman: null }, 'out')) unassigned.push({ name: m.name });
+  for (const o of rec.out) if (!used.has(norm(o.name))) unavailable.push({ name: o.name, foreman: null, reason: o.reason === 'crossed out' ? 'crossed out' : 'out' });
+  return { day, date, ...rec, crews, pools, unavailable, unassigned };
+}
+
+export function composeWeek(satKey, roster, days = {}) {
   const dates = weekDates(satKey);
   const out = {};
-  DAYS.forEach((d, i) => { out[d] = normalizeDay(d, dates[i], days[d]); });
+  DAYS.forEach((d, i) => { out[d] = composeDay(roster, d, dates[i], days[d]); });
   return out;
 }
+
+export function emptyDay(day, date) { return composeDay(emptyRoster(), day, date, {}); }
 
 export function cloneWeek(week) {
   const out = {};
@@ -103,30 +148,45 @@ export function cloneWeek(week) {
   return out;
 }
 
-// Start a new week from the previous week's roster (last day that has one).
-// People who were out or crossed out go back onto their crew/pool — being
-// out is a per-day thing, not a roster change.
-export function seedWeek(satKey, prevWeek) {
-  let src = null;
-  for (const d of [...DAYS].reverse()) {
-    if (prevWeek?.[d] && Object.keys(prevWeek[d].crews || {}).length) { src = prevWeek[d]; break; }
+// Turn a parsed (Excel) day into a global roster. People out that day go
+// back onto their crew or pool — being out is per day, not a roster change.
+export function rosterFromDay(day) {
+  const roster = emptyRoster();
+  if (!day) return roster;
+  const crewMap = new Map();
+  for (const [foreman, c] of Object.entries(day.crews || {})) {
+    const entry = { foreman, qual: c.qual || null, members: (c.members || []).map(m => ({ name: m.name, qual: m.qual || null })) };
+    roster.crews.push(entry);
+    crewMap.set(foreman, entry);
   }
-  const roster = src ? restoreRoster(src) : null;
-  const week = normalizeWeek(satKey);
-  if (roster) for (const d of DAYS) Object.assign(week[d], JSON.parse(JSON.stringify(roster)));
-  return week;
+  for (const p of Object.keys(roster.pools)) roster.pools[p] = (day.pools?.[p] || []).map(m => ({ name: m.name }));
+  roster.unassigned = (day.unassigned || []).map(m => ({ name: m.name }));
+  for (const u of day.unavailable || []) {
+    if (u.foreman && crewMap.has(u.foreman)) { if (norm(u.name) !== norm(u.foreman)) crewMap.get(u.foreman).members.push({ name: u.name, qual: u.qual || null }); }
+    else if (u.pool && roster.pools[u.pool]) roster.pools[u.pool].push({ name: u.name });
+    else roster.pools.extra.push({ name: u.name });
+  }
+  return roster;
 }
 
-function restoreRoster(day) {
-  const crews = JSON.parse(JSON.stringify(day.crews || {}));
-  const pools = JSON.parse(JSON.stringify({ laborers: [], drivers: [], extra: [], ...(day.pools || {}) }));
-  const unassigned = JSON.parse(JSON.stringify(day.unassigned || []));
-  for (const u of day.unavailable || []) {
-    if (u.foreman && crews[u.foreman]) crews[u.foreman].members.push({ name: u.name, qual: u.qual || null });
-    else if (u.pool && pools[u.pool]) pools[u.pool].push({ name: u.name });
-    else pools.extra.push({ name: u.name });
+// Latest day in a parsed week that has a roster
+export function rosterFromWeek(week) {
+  for (const d of [...DAYS].reverse()) {
+    if (week?.[d] && Object.keys(week[d].crews || {}).length) return rosterFromDay(week[d]);
   }
-  return { crews, pools, unavailable: [], unassigned };
+  return null;
+}
+
+function cleanRoster(r) {
+  const out = emptyRoster();
+  for (const c of r?.crews || []) {
+    const foreman = String(c.foreman || '').trim();
+    if (!foreman) continue;
+    out.crews.push({ foreman, qual: c.qual || null, members: (c.members || []).filter(m => String(m.name || '').trim()).map(m => ({ name: String(m.name).trim(), qual: m.qual || null })) });
+  }
+  for (const p of Object.keys(out.pools)) out.pools[p] = (r?.pools?.[p] || []).filter(m => String(m.name || '').trim()).map(m => ({ name: String(m.name).trim() }));
+  out.unassigned = (r?.unassigned || []).filter(m => String(m.name || '').trim()).map(m => ({ name: String(m.name).trim() }));
+  return out;
 }
 
 // ── Graph plumbing ───────────────────────────────────────────
@@ -162,87 +222,185 @@ async function writeToken() {
   catch (e) { throw new Error(`Couldn't get permission to save (${e.message || e}). IT needs to grant Files.ReadWrite.All — see SITE-DATA-SETUP.md.`); }
 }
 
-// ── Load ─────────────────────────────────────────────────────
-// Returns the week in parser shape plus _meta. A week that hasn't been
-// set up yet returns only { _meta: { exists:false } }.
-export async function loadStoreWeek(satKey) {
+async function readJson(path) {
   const token = await getToken();
   if (!token) throw new Error('Not signed in.');
   const driveId = await resolveDrive(token);
-  const path = dataPath(satKey);
   const cb = `_cb=${Date.now()}`;
   const metaRes = await fetch(`${GRAPH_BASE}/drives/${driveId}/root:/${encodePath(path)}?select=id,name,eTag,lastModifiedDateTime,lastModifiedBy&${cb}`,
     { headers: { Authorization: `Bearer ${token}`, ...noCache } });
-  if (metaRes.status === 404) return { _meta: { source: 'site', exists: false, path, satKey } };
-  if (!metaRes.ok) throw new Error(`Couldn't read week data (${metaRes.status}).`);
+  if (metaRes.status === 404) return null;
+  if (!metaRes.ok) throw new Error(`Couldn't read ${path.split('/').pop()} (${metaRes.status}).`);
   const meta = await metaRes.json();
   const body = await fetch(`${GRAPH_BASE}/drives/${driveId}/items/${meta.id}/content?${cb}`,
     { headers: { Authorization: `Bearer ${token}`, ...noCache, 'If-None-Match': '' } });
-  if (!body.ok) throw new Error(`Couldn't download week data (${body.status}).`);
-  let parsed;
-  try { parsed = JSON.parse(await body.text()); }
+  if (!body.ok) throw new Error(`Couldn't download ${meta.name} (${body.status}).`);
+  try { return { meta, data: JSON.parse(await body.text()) }; }
   catch { throw new Error(`${meta.name} isn't valid JSON. Restore an earlier version from SharePoint version history.`); }
-  const week = normalizeWeek(satKey, parsed.days || {});
+}
+
+// PUT a file. exists+eTag -> If-Match; !exists -> fail if someone created it first.
+async function putFile(token, driveId, path, body, contentType, { eTag = null, exists = false, guard = true } = {}) {
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': contentType, ...noCache };
+  let q = '';
+  if (guard && exists && eTag) headers['If-Match'] = eTag;
+  else if (guard && !exists) q = '?@microsoft.graph.conflictBehavior=fail';
+  const res = await fetch(`${GRAPH_BASE}/drives/${driveId}/root:/${encodePath(path)}:/content${q}`, { method: 'PUT', headers, body });
+  if (res.status === 412 || res.status === 409) { const e = new Error('Someone else saved this a moment ago.'); e.conflict = true; throw e; }
+  if (res.status === 423) throw new Error('the file is open in Excel — close it and save again');
+  if (res.status === 403) throw new Error('SharePoint refused the save (403). You need Edit rights on the Schedule folder.');
+  if (!res.ok) throw new Error(`save failed (${res.status})`);
+  return res.json();
+}
+
+// ── Global roster ────────────────────────────────────────────
+export async function loadRoster() {
+  const r = await readJson(ROSTER_PATH);
+  if (!r) return { roster: null, eTag: null, exists: false };
+  return { roster: cleanRoster(r.data), eTag: r.meta.eTag || null, exists: true, savedBy: r.data.savedBy || '', savedAt: r.data.savedAt || null };
+}
+
+export async function saveRoster(roster, { eTag = null, exists = false } = {}) {
+  const token = await writeToken();
+  const driveId = await resolveDrive(token);
+  const clean = cleanRoster(roster);
+  const payload = { version: STORE_VERSION, savedAt: new Date().toISOString(), savedBy: nameFromToken(token), ...clean };
+  const saved = await putFile(token, driveId, ROSTER_PATH, JSON.stringify(payload, null, 2), 'application/json', { eTag, exists });
+  return { roster: clean, eTag: saved.eTag || null, exists: true, savedBy: payload.savedBy, savedAt: payload.savedAt };
+}
+
+// ── Weeks ────────────────────────────────────────────────────
+// Returns the week in parser shape plus _meta. A week with no file yet
+// comes back empty (dates + roster) with exists:false — the first save
+// creates it.
+export async function loadStoreWeek(satKey, roster) {
+  const path = dataPath(satKey);
+  const r = await readJson(path);
+  if (!r) {
+    const week = composeWeek(satKey, roster);
+    week._meta = { source: 'site', exists: false, path, satKey, fileName: 'Site data · not saved yet' };
+    return week;
+  }
+  const week = composeWeek(satKey, roster, r.data.days || {});
   week._meta = {
     source: 'site', exists: true, path, satKey,
-    eTag: meta.eTag || null,
-    fileName: `Site data · ${meta.name}`,
-    lastModified: meta.lastModifiedDateTime,
-    savedBy: parsed.savedBy || meta.lastModifiedBy?.user?.displayName || '',
-    backup: parsed.backup || null,
+    eTag: r.meta.eTag || null,
+    fileName: `Site data · ${r.meta.name}`,
+    lastModified: r.meta.lastModifiedDateTime,
+    savedBy: r.data.savedBy || r.meta.lastModifiedBy?.user?.displayName || '',
   };
   return week;
 }
 
-// ── Save ─────────────────────────────────────────────────────
-// Writes the JSON (If-Match guards against overwriting someone else's
-// save), then the backup log book. A failed backup does not undo the save.
-export async function saveStoreWeek(satKey, week, { eTag = null, exists = false, savedBy = '' } = {}) {
+function weekPayload(satKey, week, savedAt, savedBy) {
+  const days = {};
+  for (const d of DAYS) days[d] = { date: weekDates(satKey)[DAYS.indexOf(d)], ...dayRecord(week?.[d]) };
+  return { version: STORE_VERSION, weekEnding: satKey, savedAt, savedBy, backup: backupPath(satKey), days };
+}
+
+async function writeBackup(token, driveId, satKey, composed, savedAt, savedBy) {
+  const bPath = backupPath(satKey);
+  try {
+    const buf = await buildBackupWorkbook(satKey, composed, { savedAt, savedBy });
+    await putFile(token, driveId, bPath, buf, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', { guard: false });
+    return { ok: true, path: bPath };
+  } catch (e) {
+    return { ok: false, path: bPath, error: e.message || String(e) };
+  }
+}
+
+// Writes the week's JSON (guarded against overwriting someone else's
+// save), then its backup log book. A failed backup does not undo the save.
+export async function saveStoreWeek(satKey, week, { eTag = null, exists = false, savedBy = '', roster } = {}) {
   const token = await writeToken();
   const driveId = await resolveDrive(token);
   if (!savedBy) savedBy = nameFromToken(token);
-  const days = {};
-  const clean = normalizeWeek(satKey, week);
-  for (const d of DAYS) { const { day, ...rest } = clean[d]; days[d] = rest; }
   const savedAt = new Date().toISOString();
-  const bPath = backupPath(satKey);
-  const payload = { version: STORE_VERSION, weekEnding: satKey, savedAt, savedBy, backup: bPath, days };
-
-  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...noCache };
-  if (exists && eTag) headers['If-Match'] = eTag;
-  const res = await fetch(`${GRAPH_BASE}/drives/${driveId}/root:/${encodePath(dataPath(satKey))}:/content`,
-    { method: 'PUT', headers, body: JSON.stringify(payload, null, 2) });
-  if (res.status === 412 || res.status === 409) {
-    const err = new Error('Someone else saved this week a moment ago.');
-    err.conflict = true;
-    throw err;
-  }
-  if (!res.ok) throw new Error(res.status === 403
-    ? 'SharePoint refused the save (403). You need Edit rights on the Schedule folder.'
-    : `Couldn't save the week (${res.status}).`);
-  const saved = await res.json();
-
-  let backup = { ok: true, path: bPath };
-  try {
-    const buf = await buildBackupWorkbook(satKey, clean, { savedAt, savedBy });
-    const up = await fetch(`${GRAPH_BASE}/drives/${driveId}/root:/${encodePath(bPath)}:/content`, {
-      method: 'PUT',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
-      body: buf,
-    });
-    if (up.status === 423) throw new Error('the backup file is open in Excel — close it and save again');
-    if (!up.ok) throw new Error(`upload failed (${up.status})`);
-  } catch (e) {
-    backup = { ok: false, path: bPath, error: e.message || String(e) };
-  }
-
-  const out = normalizeWeek(satKey, days);
-  out._meta = {
+  const payload = weekPayload(satKey, week, savedAt, savedBy);
+  const saved = await putFile(token, driveId, dataPath(satKey), JSON.stringify(payload, null, 2), 'application/json', { eTag, exists });
+  const composed = composeWeek(satKey, roster, payload.days);
+  const backup = await writeBackup(token, driveId, satKey, composed, savedAt, savedBy);
+  composed._meta = {
     source: 'site', exists: true, path: dataPath(satKey), satKey,
     eTag: saved.eTag || null, fileName: `Site data · ${saved.name || satKey + '.json'}`,
-    lastModified: saved.lastModifiedDateTime || savedAt, savedBy, backup: bPath,
+    lastModified: saved.lastModifiedDateTime || savedAt, savedBy,
   };
-  return { week: out, backup };
+  return { week: composed, backup };
+}
+
+// ── Season (all weeks of a year) ─────────────────────────────
+// Saturdays of every week that has a day in `year`: from the first
+// Saturday on/after Jan 1 through the first Saturday on/after Dec 31.
+export function seasonSaturdays(year) {
+  const first = new Date(year, 0, 1, 12);
+  first.setDate(first.getDate() + ((6 - first.getDay() + 7) % 7));
+  const last = new Date(year, 11, 31, 12);
+  last.setDate(last.getDate() + ((6 - last.getDay() + 7) % 7));
+  const out = [];
+  for (const d = new Date(first); d <= last; d.setDate(d.getDate() + 7)) {
+    out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+  }
+  return out.filter(isStoreWeek);
+}
+
+// satKeys of week files that already exist in Site Data
+export async function listStoreWeeks(years) {
+  const token = await getToken();
+  if (!token) throw new Error('Not signed in.');
+  const driveId = await resolveDrive(token);
+  const found = new Set();
+  for (const y of years) {
+    const res = await fetch(`${GRAPH_BASE}/drives/${driveId}/root:/${encodePath(`${DATA_FOLDER}/${y}`)}:/children?$select=name&$top=500&_cb=${Date.now()}`,
+      { headers: { Authorization: `Bearer ${token}`, ...noCache } });
+    if (res.status === 404) continue;
+    if (!res.ok) throw new Error(`Couldn't list ${DATA_FOLDER}/${y} (${res.status}).`);
+    for (const f of (await res.json()).value || []) {
+      const m = /^(\d{4}-\d{2}-\d{2})\.json$/.exec(f.name);
+      if (m) found.add(m[1]);
+    }
+  }
+  return found;
+}
+
+async function inBatches(items, size, fn) {
+  for (let i = 0; i < items.length; i += size) await Promise.all(items.slice(i, i + size).map(fn));
+}
+
+// Create every missing week of a season (JSON + backup log book).
+// Weeks that already exist are left alone.
+export async function createSeason(year, roster, { onProgress = () => {} } = {}) {
+  const sats = seasonSaturdays(year);
+  const existing = await listStoreWeeks([...new Set(sats.map(s => s.slice(0, 4)))]);
+  const todo = sats.filter(s => !existing.has(s));
+  let done = 0, failed = [];
+  onProgress({ done, total: todo.length });
+  await inBatches(todo, 3, async sat => {
+    try { await saveStoreWeek(sat, composeWeek(sat, roster), { exists: false, roster }); }
+    catch (e) { if (!e.conflict) failed.push(`${sat}: ${e.message}`); }
+    onProgress({ done: ++done, total: todo.length });
+  });
+  return { created: todo.length - failed.length, skipped: existing.size, failed };
+}
+
+// After a roster change: rewrite the backup log books of existing weeks
+// (from `fromSat` on) so they show the new roster. Week data is untouched.
+export async function rebuildBackups(fromSat, roster, { onProgress = () => {} } = {}) {
+  const token = await writeToken();
+  const driveId = await resolveDrive(token);
+  const years = [fromSat.slice(0, 4), String(+fromSat.slice(0, 4) + 1)];
+  const sats = [...await listStoreWeeks(years)].filter(s => s >= fromSat).sort();
+  let done = 0; const failed = [];
+  onProgress({ done, total: sats.length });
+  await inBatches(sats, 3, async sat => {
+    try {
+      const r = await readJson(dataPath(sat));
+      const composed = composeWeek(sat, roster, r?.data?.days || {});
+      const b = await writeBackup(token, driveId, sat, composed, r?.data?.savedAt || new Date().toISOString(), r?.data?.savedBy || '');
+      if (!b.ok) failed.push(`${sat}: ${b.error}`);
+    } catch (e) { failed.push(`${sat}: ${e.message}`); }
+    onProgress({ done: ++done, total: sats.length });
+  });
+  return { total: sats.length, failed };
 }
 
 // ============================================================
@@ -278,6 +436,15 @@ export async function buildBackupWorkbook(satKey, week, { savedAt = new Date().t
   wb.creator = 'Daily Jobs site';
   wb.created = new Date(savedAt);
   for (const dayName of DAYS) writeDaySheet(wb.addWorksheet(dayName), week[dayName] || emptyDay(dayName, null));
+
+  // Job notes, one row per job that has any
+  const notesRows = [];
+  for (const dayName of DAYS) for (const j of week[dayName]?.jobs || []) if (j.notes) notesRows.push([dayName, week[dayName].date, j.num, j.customer, j.notes]);
+  const ns = wb.addWorksheet('Job Notes');
+  ns.columns = [{ header: 'Day', width: 12 }, { header: 'Date', width: 12 }, { header: '#', width: 5 }, { header: 'Customer / job', width: 30 }, { header: 'Notes', width: 90 }];
+  ns.getRow(1).font = { name: 'Calibri', size: 11, bold: true };
+  if (notesRows.length) notesRows.forEach(r => { const row = ns.addRow(r); row.alignment = { wrapText: true, vertical: 'top' }; });
+  else ns.addRow(['', '', '', 'No job notes this week', '']);
 
   const about = wb.addWorksheet('About this file');
   about.getColumn(1).width = 100;
@@ -348,6 +515,7 @@ function writeDaySheet(ws, d) {
       const men = j.numMen != null && /^\d+$/.test(String(j.numMen)) ? Number(j.numMen) : j.numMen;
       const wrapMid = { alignment: { horizontal: 'center', vertical: 'middle', wrapText: true } };
       set(`B${row}`, j.customer || null, { bold: true, size: 10, strike }, wrapMid);
+      if (j.notes) ws.getCell(`B${row}`).note = { texts: [{ text: String(j.notes) }] };
       set(`C${row}`, po ?? null, { strike }, wrapMid);
       set(`D${row}`, j.location || null, { bold: true, size: 10, strike }, wrapMid);
       set(`E${row}`, j.onsiteTime || null, { strike }, wrapMid);

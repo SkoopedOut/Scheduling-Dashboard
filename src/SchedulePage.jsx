@@ -115,8 +115,8 @@ export default function SchedulePage({
               <span style={{ fontSize: isMobile ? 15 : 17, color: A.label2 }}>{new Date(cur.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</span>
             </div>
           )}
-          {editor && <EditBar dayName={selectedDay} notes={cur?.notes} saveState={editor.saveState} isMobile={isMobile}
-            onAddJob={editor.onAddJob} onEditRoster={editor.onEditRoster} onEditNotes={editor.onEditNotes} />}
+          {editor && <EditBar dayName={selectedDay} notes={cur?.notes} saveState={editor.saveState} isMobile={isMobile} outCount={(cur?.out || []).length}
+            onAddJob={editor.onAddJob} onEditRoster={editor.onEditRoster} onEditOut={editor.onEditOut} onEditNotes={editor.onEditNotes} />}
           <DayJobs dayData={cur} flashedJobs={flashedJobs} weeksCache={weeksCache} curSatKey={currentWeekSat}
             query={search.query} isMobile={isMobile} onSearchMonth={() => setScope('month')} onEditJob={editor?.onEditJob} />
         </>

@@ -9,19 +9,20 @@ import {
 import {
   DAY_ORDER, SYS, PM_COLORS, foremanColor, canonicalName, isNonPerson, isOvertimeStart, hasDriverTag, DRIVER_SUFFIX,
 } from '../scheduleUtils.js';
-import { nextFreeNum, numTakenBy, rosterToEditor, editorToRoster } from '../weekEdits.js';
+import { nextFreeNum, numTakenBy, rosterToModel, modelToRoster, rosterPeople } from '../weekEdits.js';
 import { newId } from '../weekStore.js';
 
 const lc = s => canonicalName(s).toLowerCase();
 const short = d => d.slice(0, 3);
 
 // ── Toolbar ──────────────────────────────────────────────────
-export function EditBar({ dayName, onAddJob, onEditRoster, onEditNotes, saveState, notes, isMobile, showAddJob = true }) {
+export function EditBar({ dayName, onAddJob, onEditRoster, onEditOut, onEditNotes, saveState, notes, isMobile, showAddJob = true, outCount = 0 }) {
   return (
     <div style={{ marginBottom: 16 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         {showAddJob && <TintedButton onClick={onAddJob}><Icon name="plus" size={15} weight={2.4} />Add job</TintedButton>}
-        <TintedButton onClick={onEditRoster} color={SYS.indigo}><Icon name="person2" size={15} weight={2.1} />Edit {isMobile ? 'roster' : `${dayName}’s roster`}</TintedButton>
+        <TintedButton onClick={onEditOut} color={SYS.red}><Icon name="person" size={15} weight={2.1} />Who’s out{isMobile ? '' : ` ${dayName}`}{outCount ? ` (${outCount})` : ''}</TintedButton>
+        <TintedButton onClick={onEditRoster} color={SYS.indigo}><Icon name="person2" size={15} weight={2.1} />Edit roster</TintedButton>
         <TintedButton onClick={onEditNotes} color={A.gray}><Icon name="doc" size={15} weight={2.1} />{notes ? 'Edit notes' : 'Add notes'}</TintedButton>
         <SaveStatus state={saveState} />
       </div>
@@ -37,26 +38,39 @@ export function EditBar({ dayName, onAddJob, onEditRoster, onEditNotes, saveStat
 export function SaveStatus({ state }) {
   if (!state) return null;
   const time = state.at ? new Date(state.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+  if (state.status === 'rebuilding') return <span role="status" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: A.label2 }}><Spinner size={13} />Roster saved · updating backup sheets {state.done}/{state.total}…</span>;
+  if (state.status === 'rebuilt') return <span role="status" style={{ fontSize: 13, color: state.failed?.length ? SYS.orange : A.label2 }}>Roster saved for every week{state.total ? ` · ${state.total - (state.failed?.length || 0)} backup sheets updated` : ''}{state.failed?.length ? ` · ${state.failed.length} couldn’t be written (${state.failed[0]})` : ''}</span>;
   if (state.status === 'saving') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: A.label2 }}><Spinner size={13} />Saving…</span>;
   if (state.status === 'error') return <span role="alert" style={{ fontSize: 13, color: SYS.red }}>Not saved: {state.message}</span>;
   if (state.backup && !state.backup.ok) return <span role="status" style={{ fontSize: 13, color: SYS.orange }}>Saved {time}. Backup sheet not updated: {state.backup.error}</span>;
   return <span role="status" style={{ fontSize: 13, color: A.label2, display: 'inline-flex', alignItems: 'center', gap: 5 }}><Icon name="checkmark" size={13} weight={2.6} color={SYS.green} />Saved {time} · backup sheet updated</span>;
 }
 
-// ── Week not set up yet ──────────────────────────────────────
-export function StoreWeekEmpty({ weekLabel, onStart, saveState, backupPath }) {
-  const busy = saveState?.status === 'saving';
+// ── Season panel (Month tab): create every week of a year ────
+export function SeasonPanel({ year, status, onCreate, onCheck }) {
+  useEffect(() => { onCheck?.(); }, [year]);
+  const st = status || {};
+  const busy = st.state === 'creating';
+  const complete = st.total != null && st.existing >= st.total;
   return (
-    <div style={{ padding: '64px 20px', textAlign: 'center' }}>
-      <div style={{ fontSize: 17, fontWeight: 600 }}>{weekLabel} isn’t set up yet</div>
-      <div style={{ fontSize: 14, color: A.label2, marginTop: 6, maxWidth: 480, marginInline: 'auto', lineHeight: 1.45 }}>
-        From 2027 the schedule lives on this site. Setting up the week copies the roster from the week before, starts every day with no jobs,
-        and writes a backup log book to SharePoint{backupPath ? ` (${backupPath.split('/').pop()})` : ''}.
+    <div style={{ background: A.cell, borderRadius: 12, padding: '12px 16px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+      <Icon name="calendar" size={20} color={SYS.blue} />
+      <div style={{ flex: 1, minWidth: 220 }}>
+        <div style={{ fontSize: 15, fontWeight: 600 }}>{year} season</div>
+        <div className="tnum" style={{ fontSize: 13, color: A.label2, marginTop: 2 }}>
+          {st.state === 'checking' ? 'Checking SharePoint…'
+            : busy ? `Creating weeks ${st.done}/${st.todo}…`
+            : st.state === 'error' ? <span style={{ color: SYS.red }}>{st.message}</span>
+            : st.total != null ? (complete
+                ? `All ${st.total} weeks are created, each with a backup log book in SharePoint.`
+                : `${st.existing} of ${st.total} weeks saved in SharePoint. Every week can be scheduled now; creating them all writes the backup log books ahead of time.`)
+            : 'Every week of the year is open for scheduling.'}
+          {st.failed?.length ? <span style={{ color: SYS.orange }}> {st.failed.length} couldn’t be created ({st.failed[0]}).</span> : null}
+        </div>
       </div>
-      <div style={{ marginTop: 18, display: 'flex', justifyContent: 'center', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <FilledButton onClick={onStart} disabled={busy}>{busy ? <><Spinner size={14} color="#fff" />Setting up…</> : 'Set up this week'}</FilledButton>
-      </div>
-      {saveState?.status === 'error' && <div role="alert" style={{ marginTop: 12, fontSize: 13, color: SYS.red }}>{saveState.message}</div>}
+      {!complete && st.total != null && (
+        <FilledButton onClick={onCreate} disabled={busy}>{busy ? <><Spinner size={14} color="#fff" />Creating…</> : `Create all ${year} weeks`}</FilledButton>
+      )}
     </div>
   );
 }
@@ -67,27 +81,29 @@ const FOLDER_OPTS = [
 ];
 
 function blankForm(dayData) {
-  return { id: null, num: String(nextFreeNum(dayData)), customer: '', poJob: '', location: '', onsiteTime: '', trucks: '', numMen: '', crew: [], calledIn: '', jobFolder: '', cancelled: false, trash: '', driverReturn: '' };
+  return { id: null, num: String(nextFreeNum(dayData)), customer: '', poJob: '', location: '', onsiteTime: '', trucks: '', numMen: '', crew: [], calledIn: '', jobFolder: '', cancelled: false, trash: '', driverReturn: '', notes: '' };
 }
 function formFromJob(job) {
   const s = v => (v == null ? '' : String(v));
   return { id: job.id, num: s(job.num), customer: s(job.customer), poJob: s(job.poJob), location: s(job.location), onsiteTime: s(job.onsiteTime),
     trucks: s(job.trucks), numMen: s(job.numMen), crew: [...(job.crew || [])], calledIn: s(job.calledIn), jobFolder: s(job.jobFolder),
-    cancelled: !!job.cancelled, trash: s(job.trash), driverReturn: s(job.driverReturn) };
+    cancelled: !!job.cancelled, trash: s(job.trash), driverReturn: s(job.driverReturn), notes: s(job.notes) };
 }
 
-export function JobEditorSheet({ open, onClose, week, dayName, job, onSave, onDelete, isMobile }) {
+export function JobEditorSheet({ open, onClose, week, dayName, job, onSave, onDelete, isMobile, initialTab = 'job' }) {
   const [form, setForm] = useState(() => (job ? formFromJob(job) : blankForm(week?.[dayName])));
   const [targetDay, setTargetDay] = useState(dayName);
   const [alsoDays, setAlsoDays] = useState([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [tab, setTab] = useState(initialTab);
   useEffect(() => {
     if (!open) return;
+    setTab(initialTab);
     setForm(job ? formFromJob(job) : blankForm(week?.[dayName]));
     setTargetDay(dayName); setAlsoDays([]); setErr(null); setConfirmDelete(false); setBusy(false);
-  }, [open, job?.id, dayName]);
+  }, [open, job?.id, dayName, initialTab]);
 
   const set = patch => setForm(f => ({ ...f, ...patch }));
   const dayData = week?.[targetDay];
@@ -107,7 +123,7 @@ export function JobEditorSheet({ open, onClose, week, dayName, job, onSave, onDe
       poJob: t(form.poJob), location: t(form.location), onsiteTime: t(form.onsiteTime), trucks: t(form.trucks),
       numMen: form.numMen.trim() === '' ? persons : (/^\d+$/.test(form.numMen.trim()) ? parseInt(form.numMen, 10) : form.numMen.trim()),
       crew: form.crew, calledIn: t(form.calledIn), jobFolder: form.jobFolder || null, cancelled: form.cancelled,
-      trash: t(form.trash), driverReturn: t(form.driverReturn),
+      trash: t(form.trash), driverReturn: t(form.driverReturn), notes: form.notes.trim(),
     };
     setBusy(true); setErr(null);
     const ok = await onSave(targetDay, out, { fromDay: job ? dayName : null, alsoDays });
@@ -129,7 +145,17 @@ export function JobEditorSheet({ open, onClose, week, dayName, job, onSave, onDe
     <Sheet open={open} onClose={onClose} isMobile={isMobile} width={820}
       title={job ? `Edit #${job.num} ${job.customer}` : `New job · ${targetDay}`}
       subtitle={dayData?.date ? new Date(dayData.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }) : undefined}>
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0,1fr) minmax(0,1fr)', gap: 16 }}>
+      <Segmented ariaLabel="Job sections" value={tab} onChange={setTab} style={{ marginBottom: 16, maxWidth: 360 }}
+        options={[{ id: 'job', label: 'Job & crew' }, { id: 'notes', label: form.notes.trim() ? 'Notes •' : 'Notes' }]} />
+      {tab === 'notes' && (
+        <div>
+          <textarea value={form.notes} onChange={e => set({ notes: e.target.value })} rows={isMobile ? 10 : 14} aria-label="Job notes" autoFocus
+            placeholder={'Anything the crew or office should know — site contact and phone, gate or door codes, elevator / loading dock booking, parking, COI, scope details, punch items, what’s left for tomorrow…'}
+            className="ap-search ap-focus" style={{ ...fieldStyle, height: 'auto', padding: '12px', lineHeight: 1.5, resize: 'vertical' }} />
+          <SectionFooter>Notes show under the job on the schedule and in a Job Notes tab on the backup log book.</SectionFooter>
+        </div>
+      )}
+      <div style={{ display: tab === 'job' ? 'grid' : 'none', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0,1fr) minmax(0,1fr)', gap: 16 }}>
         <div>
           <SectionHeader>Job</SectionHeader>
           <Group style={{ background: A.cell2 }}>
@@ -366,16 +392,15 @@ function PersonChip({ name, qual, bold, status, uses, out, onAdd }) {
   );
 }
 
-// ── Roster editor ────────────────────────────────────────────
+// ── Roster editor (one roster for every week) ───────────────
 const QUALS = ['', 'T', 'V', 'A', 'T/V'];
-const STATUS = [{ id: 'in', label: 'Working' }, { id: 'out', label: 'Out' }, { id: 'struck', label: 'Crossed out' }];
 const POOL_TITLES = { laborers: 'Laborers', drivers: 'Drivers', extra: 'Extra' };
 
-export function RosterEditorSheet({ open, onClose, dayData, dayName, onSave, isMobile }) {
-  const [model, setModel] = useState(() => rosterToEditor(dayData));
-  const [applyTo, setApplyTo] = useState('rest');
+export function RosterEditorSheet({ open, onClose, roster, onSave, isMobile }) {
+  const [model, setModel] = useState(() => rosterToModel(roster));
   const [busy, setBusy] = useState(false);
-  useEffect(() => { if (open) { setModel(rosterToEditor(dayData)); setApplyTo(dayName === 'Saturday' ? 'day' : 'rest'); setBusy(false); } }, [open, dayName]);
+  const [err, setErr] = useState(null);
+  useEffect(() => { if (open) { setModel(rosterToModel(roster)); setBusy(false); setErr(null); } }, [open]);
 
   const update = fn => setModel(m => { const c = JSON.parse(JSON.stringify(m)); fn(c); return c; });
   const listOf = (m, where) => where.kind === 'crew' ? m.crews.find(c => c.key === where.key)?.members : where.kind === 'pool' ? m.pools[where.key] : m.unassigned;
@@ -387,43 +412,33 @@ export function RosterEditorSheet({ open, onClose, dayData, dayName, onSave, isM
   function move(where, key, targetId) {
     const t = targets.find(x => x.id === targetId);
     if (!t) return;
-    update(m => {
-      const src = listOf(m, where);
-      const i = src.findIndex(p => p.key === key);
-      if (i < 0) return;
-      const [p] = src.splice(i, 1);
-      listOf(m, t.where).push(p);
-    });
+    update(m => { const src = listOf(m, where); const i = src.findIndex(p => p.key === key); if (i < 0) return; const [p] = src.splice(i, 1); listOf(m, t.where).push(p); });
   }
   async function save() {
-    setBusy(true);
-    const ok = await onSave(editorToRoster(model), applyTo);
+    const r = modelToRoster(model);
+    const names = [...r.crews.flatMap(c => [c.foreman, ...c.members.map(m => m.name)]), ...Object.values(r.pools).flat().map(m => m.name), ...r.unassigned.map(m => m.name)];
+    const seen = new Set(), dup = names.find(n => { const k = n.toLowerCase(); if (seen.has(k)) return true; seen.add(k); return false; });
+    if (dup) { setErr(`${dup} is on the roster twice. Each name can only be in one place.`); return; }
+    setBusy(true); setErr(null);
+    const res = await onSave(r);
     setBusy(false);
-    if (ok) onClose();
+    if (res === true) onClose(); else if (typeof res === 'string') setErr(res);
   }
-  const idx = DAY_ORDER.indexOf(dayName);
-  const applyOpts = [
-    { id: 'day', label: `Just ${short(dayName)}` },
-    ...(idx < 6 ? [{ id: 'rest', label: `${short(dayName)}–Sat` }] : []),
-    { id: 'week', label: 'Whole week' },
-  ];
 
   const section = (title, where, people, color, withQual, header) => (
     <Group key={where.kind + (where.key || '')} style={{ background: A.cell2, padding: '10px 12px', marginBottom: 10 }}>
       {header || <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
         <span style={{ width: 8, height: 8, borderRadius: '50%', background: color }} /><span style={{ fontSize: 15, fontWeight: 600 }}>{title}</span>
+        <span className="tnum" style={{ fontSize: 12, color: A.label3 }}>{people.length}</span>
       </div>}
       {people.map(p => (
-        <div key={p.key} style={{ display: 'flex', gap: 6, alignItems: 'center', padding: '4px 0', flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
-          <TextInput value={p.name} onChange={v => update(m => { listOf(m, where).find(x => x.key === p.key).name = v; })} ariaLabel="Name"
-            style={{ height: 32, fontSize: 14, flex: isMobile ? '1 1 100%' : '1 1 auto', textDecoration: p.status === 'struck' ? 'line-through' : 'none', color: p.status === 'in' ? A.label : A.label2 }} />
-          {withQual && <SelectField value={p.qual || ''} onChange={v => update(m => { listOf(m, where).find(x => x.key === p.key).qual = v; })} ariaLabel="Qualification" style={{ width: 70, flexShrink: 0 }}>
+        <div key={p.key} style={{ display: 'flex', gap: 6, alignItems: 'center', padding: '4px 0' }}>
+          <TextInput value={p.name} onChange={v => update(m => { listOf(m, where).find(x => x.key === p.key).name = v; })} ariaLabel="Name" placeholder="Name"
+            style={{ height: 32, fontSize: 14, flex: '1 1 auto', minWidth: 0 }} />
+          {withQual && <SelectField value={p.qual || ''} onChange={v => update(m => { listOf(m, where).find(x => x.key === p.key).qual = v; })} ariaLabel="Qualification" style={{ width: 68, flexShrink: 0 }}>
             {QUALS.map(q => <option key={q} value={q}>{q || '—'}</option>)}
           </SelectField>}
-          <SelectField value={p.status} onChange={v => update(m => { listOf(m, where).find(x => x.key === p.key).status = v; })} ariaLabel="Status" style={{ width: 128, flexShrink: 0 }}>
-            {STATUS.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
-          </SelectField>
-          <SelectField value="" onChange={v => move(where, p.key, v)} ariaLabel="Move to" style={{ width: 120, flexShrink: 0 }}>
+          <SelectField value="" onChange={v => move(where, p.key, v)} ariaLabel="Move to" style={{ width: isMobile ? 96 : 124, flexShrink: 0 }}>
             <option value="">Move to…</option>
             {targets.filter(t => JSON.stringify(t.where) !== JSON.stringify(where)).map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
           </SelectField>
@@ -433,37 +448,98 @@ export function RosterEditorSheet({ open, onClose, dayData, dayName, onSave, isM
           </button>
         </div>
       ))}
-      <PlainButton onClick={() => update(m => { listOf(m, where).push({ key: newId(), name: '', qual: '', status: 'in' }); })} style={{ fontSize: 14, paddingLeft: 0, marginTop: 2 }}>
+      <PlainButton onClick={() => update(m => { listOf(m, where).push({ key: newId(), name: '', qual: '' }); })} style={{ fontSize: 14, paddingLeft: 0, marginTop: 2 }}>
         <Icon name="plus" size={14} weight={2.4} />Add person
       </PlainButton>
     </Group>
   );
 
   return (
-    <Sheet open={open} onClose={onClose} isMobile={isMobile} width={720} title={`${dayName}’s roster`}
-      subtitle="Out = vacation or injured (listed above the foreman). Crossed out = struck through.">
-      <div style={{ marginBottom: 14 }}>
-        <div style={{ fontSize: 13, color: A.label2, marginBottom: 6 }}>Save changes to</div>
-        <Segmented ariaLabel="Apply roster to" value={applyTo} onChange={setApplyTo} options={applyOpts} />
-      </div>
+    <Sheet open={open} onClose={onClose} isMobile={isMobile} width={680} title="Roster — every week"
+      subtitle="Changes apply to every week on the site. Who’s out is set per day.">
       <SectionHeader right={<PlainButton onClick={() => update(m => { m.crews.push({ key: newId(), foreman: '', qual: '', members: [] }); })} style={{ fontSize: 14 }}><Icon name="plus" size={14} weight={2.4} />Add crew</PlainButton>}>Crews</SectionHeader>
       {model.crews.map((c, i) => section(c.foreman, { kind: 'crew', key: c.key }, c.members, foremanColor(c.foreman, i), true, (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
           <span style={{ width: 8, height: 8, borderRadius: '50%', background: foremanColor(c.foreman, i), flexShrink: 0 }} />
           <TextInput value={c.foreman} onChange={v => update(m => { m.crews.find(x => x.key === c.key).foreman = v; })} placeholder="Foreman" ariaLabel="Foreman name" style={{ height: 32, fontSize: 15, fontWeight: 600 }} />
-          <SelectField value={c.qual || ''} onChange={v => update(m => { m.crews.find(x => x.key === c.key).qual = v; })} ariaLabel="Foreman qualification" style={{ width: 70, flexShrink: 0 }}>
+          <SelectField value={c.qual || ''} onChange={v => update(m => { m.crews.find(x => x.key === c.key).qual = v; })} ariaLabel="Foreman qualification" style={{ width: 68, flexShrink: 0 }}>
             {QUALS.map(q => <option key={q} value={q}>{q || '—'}</option>)}
           </SelectField>
           <PlainButton color={SYS.red} onClick={() => update(m => { const k = m.crews.findIndex(x => x.key === c.key); const [gone] = m.crews.splice(k, 1); m.unassigned.push(...gone.members); })}
-            title="Remove crew — its people move to Unassigned" style={{ fontSize: 13, flexShrink: 0 }}>Remove crew</PlainButton>
+            title="Remove crew — its people move to Unassigned" style={{ fontSize: 13, flexShrink: 0 }}>Remove</PlainButton>
         </div>
       )))}
       <SectionHeader style={{ marginTop: 8 }}>Pools</SectionHeader>
       {Object.keys(POOL_TITLES).map(p => section(POOL_TITLES[p], { kind: 'pool', key: p }, model.pools[p], p === 'drivers' ? SYS.purple : A.gray, false))}
       {section('Unassigned', { kind: 'un' }, model.unassigned, SYS.yellow, false)}
+      {err && <div role="alert" style={{ fontSize: 14, color: SYS.red, marginTop: 4 }}>{err}</div>}
       <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 8 }}>
         <GrayButton onClick={onClose} disabled={busy}>Cancel</GrayButton>
-        <FilledButton onClick={save} disabled={busy}>{busy ? <><Spinner size={14} color="#fff" />Saving…</> : 'Save roster'}</FilledButton>
+        <FilledButton onClick={save} disabled={busy}>{busy ? <><Spinner size={14} color="#fff" />Saving…</> : 'Save for every week'}</FilledButton>
+      </div>
+    </Sheet>
+  );
+}
+
+// ── Who's out on a day ───────────────────────────────────────
+// Tap a name to cycle: working → out (vacation / injured) → crossed out.
+const NEXT = { in: 'out', out: 'crossed out', 'crossed out': 'in' };
+export function OutSheet({ open, onClose, roster, week, dayName, onSave, isMobile }) {
+  const day = week?.[dayName];
+  const init = () => new Map((day?.out || []).map(o => [o.name.toLowerCase(), o]));
+  const [out, setOut] = useState(init);
+  const [alsoDays, setAlsoDays] = useState([]);
+  const [extra, setExtra] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (open) { setOut(init()); setAlsoDays([]); setExtra(''); setBusy(false); } }, [open, dayName]);
+
+  const people = rosterPeople(roster);
+  const onRoster = new Set(people.map(p => p.name.toLowerCase()));
+  const offRoster = [...out.values()].filter(o => !onRoster.has(o.name.toLowerCase()));
+  const groups = [];
+  for (const p of people) { let g = groups.find(x => x.title === p.group); if (!g) groups.push(g = { title: p.group, people: [] }); g.people.push(p); }
+  const statusOf = n => out.get(n.toLowerCase())?.reason || 'in';
+  const cycle = n => setOut(m => { const c = new Map(m); const nx = NEXT[statusOf(n)]; if (nx === 'in') c.delete(n.toLowerCase()); else c.set(n.toLowerCase(), { name: n, reason: nx }); return c; });
+  const dateOf = d => week?.[d]?.date ? new Date(week[d].date + 'T12:00:00').toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' }) : '';
+  const counts = { out: [...out.values()].filter(o => o.reason === 'out').length, struck: [...out.values()].filter(o => o.reason === 'crossed out').length };
+
+  const chip = (n, bold) => {
+    const st = statusOf(n);
+    return (
+      <button key={n} type="button" onClick={() => cycle(n)} className="ap-btn ap-press" title={st === 'in' ? 'Working' : st === 'out' ? 'Out — vacation / injured' : 'Crossed out'}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 10px', borderRadius: 999, cursor: 'pointer', fontSize: 14, fontWeight: bold ? 600 : 400,
+          border: `1px solid ${st === 'in' ? 'transparent' : SYS.red}`, background: st === 'in' ? A.fill3 : tint(SYS.red, 0.16), color: st === 'in' ? A.label : A.label,
+          textDecoration: st === 'crossed out' ? 'line-through' : 'none' }}>
+        {n}{st === 'out' && <span style={{ fontSize: 10, fontWeight: 700, color: SYS.red }}>OUT</span>}
+      </button>
+    );
+  };
+
+  return (
+    <Sheet open={open} onClose={onClose} isMobile={isMobile} width={680} title={`Who’s out ${dayName}`}
+      subtitle="Tap a name: working → out (vacation / injured) → crossed out → working">
+      <div className="tnum" style={{ fontSize: 13, color: A.label2, marginBottom: 12 }}>{counts.out} out · {counts.struck} crossed out</div>
+      {groups.map(g => (
+        <Group key={g.title} style={{ background: A.cell2, padding: '9px 12px 11px', marginBottom: 10 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>{g.title}</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{g.people.map(p => chip(p.name, p.foreman))}</div>
+        </Group>
+      ))}
+      <Group style={{ background: A.cell2, padding: '9px 12px 11px', marginBottom: 10 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>Not on the roster</div>
+        {offRoster.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>{offRoster.map(o => chip(o.name))}</div>}
+        <div style={{ display: 'flex', gap: 6 }}>
+          <TextInput value={extra} onChange={setExtra} placeholder="Name" style={{ height: 34, fontSize: 14 }} ariaLabel="Add someone who is out" />
+          <GrayButton onClick={() => { const n = extra.trim(); if (n) { setOut(m => new Map(m).set(n.toLowerCase(), { name: n, reason: 'out' })); setExtra(''); } }} style={{ padding: '6px 12px', fontSize: 14 }}>Mark out</GrayButton>
+        </div>
+      </Group>
+      <SectionHeader style={{ marginTop: 6 }}>Same list on other days this week</SectionHeader>
+      <DayChips value={alsoDays} disabled={[dayName]} onToggle={d => setAlsoDays(a => a.includes(d) ? a.filter(x => x !== d) : [...a, d])} dateOf={dateOf} />
+      <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16 }}>
+        <GrayButton onClick={onClose} disabled={busy}>Cancel</GrayButton>
+        <FilledButton disabled={busy} onClick={async () => { setBusy(true); const ok = await onSave([...out.values()], alsoDays); setBusy(false); if (ok) onClose(); }}>
+          {busy ? <><Spinner size={14} color="#fff" />Saving…</> : 'Save'}
+        </FilledButton>
       </div>
     </Sheet>
   );

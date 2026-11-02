@@ -5,7 +5,7 @@ import { useEffect } from 'react';
 import { DAY_ORDER, SYS, isOvertimeStart, getSaturdayKey, isoDate, todayIso } from '../scheduleUtils.js';
 import { A, tint, Icon, CircleButton, PlainButton, TintedButton, Spinner, SectionFooter } from '../ui/apple.jsx';
 
-export default function MonthTab({ weeksCache, weekStatus, monthCursor, setMonthCursor, onPickDay, mode, requestWeek, isMobile, onSearchMonth }) {
+export default function MonthTab({ weeksCache, weekStatus, monthCursor, setMonthCursor, onPickDay, mode, requestWeek, isMobile, onSearchMonth, seasonPanel }) {
   const y = monthCursor.getFullYear(), m = monthCursor.getMonth();
   const dim = new Date(y, m + 1, 0).getDate();
   const start = new Date(y, m, 1).getDay();
@@ -51,6 +51,7 @@ export default function MonthTab({ weeksCache, weekStatus, monthCursor, setMonth
         </div>
       </div>
 
+      {seasonPanel}
       <div style={{ background: A.cell, borderRadius: 12, overflow: 'hidden' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0,1fr))', borderBottom: `0.5px solid ${A.sep}` }}>
           {DAY_ORDER.map((d, i) => <div key={d} style={{ padding: '8px 10px', fontSize: 12, fontWeight: 600, color: i === 0 || i === 6 ? A.label3 : A.label2, textAlign: isMobile ? 'center' : 'right' }}>{isMobile ? d[0] : d.slice(0, 3)}</div>)}

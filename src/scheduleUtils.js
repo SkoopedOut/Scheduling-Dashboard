@@ -210,7 +210,7 @@ export function hasTruck(t){ return !!t&&!/^(na|n\/a)$/i.test(String(t).trim());
 // location, PO, PM, trucks, job #, crew), or — for multi-word queries —
 // when every word appears somewhere ("phil hilton" finds Phil's Hilton job).
 export function jobHaystack(job){
-  return [job.customer,job.location,job.poJob,job.calledIn,job.trucks,job.num!=null?`#${job.num}`:null,...(job.crew||[])]
+  return [job.customer,job.location,job.poJob,job.calledIn,job.trucks,job.num!=null?`#${job.num}`:null,...(job.crew||[]),job.notes]
     .filter(v=>v!=null&&v!=="").map(String).join("  ").toLowerCase();
 }
 export function jobMatchesQuery(job,q){

@@ -11,15 +11,10 @@ function PanelFallback(){
   return <div style={{padding:"60px",display:"flex",justifyContent:"center"}}><Spinner size={22}/></div>;
 }
 import { fetchScheduleFromSharePoint } from './sharepoint.js';
-import { isStoreWeek, loadStoreWeek, saveStoreWeek, seedWeek, cloneWeek, backupPath } from './weekStore.js';
-import { upsertJob, deleteJob, setRoster, setNotes } from './weekEdits.js';
-import { EditBar, StoreWeekEmpty, JobEditorSheet, RosterEditorSheet, NotesSheet } from './editing/WeekEditing.jsx';
-
-// 2027 onward the site owns the data (JSON in SharePoint); earlier weeks
-// still come from the Excel log books.
-function loadWeekData(satKey){
-  return isStoreWeek(satKey) ? loadStoreWeek(satKey) : fetchScheduleFromSharePoint(new Date(satKey+'T12:00:00'));
-}
+import { isStoreWeek, STORE_START_SAT, loadStoreWeek, saveStoreWeek, cloneWeek, composeWeek, emptyRoster, rosterFromWeek,
+  loadRoster, saveRoster, createSeason, rebuildBackups, seasonSaturdays, listStoreWeeks } from './weekStore.js';
+import { upsertJob, deleteJob, setOut, setNotes } from './weekEdits.js';
+import { EditBar, SeasonPanel, JobEditorSheet, RosterEditorSheet, OutSheet, NotesSheet } from './editing/WeekEditing.jsx';
 import { SAMPLE_DATA, FOREMAN_ORDER } from './sampleData.js';
 import {
   DAY_ORDER, PM_COLORS, SYS, foremanColor, REFRESH_MS, getTodayDayName, formatDate, getWeekLabel, getSaturdayKey,
@@ -141,7 +136,14 @@ export default function App(){
   // Site-owned weeks: SharePoint eTag + whether the file exists, per week
   const [storeMeta,setStoreMeta]=useState({});
   const [saveState,setSaveState]=useState(null);
-  const [editing,setEditing]=useState(null); // {kind:'job'|'roster'|'notes', day, job}
+  const [editing,setEditing]=useState(null); // {kind:'job'|'roster'|'out'|'notes', day, job, tab}
+  // One roster for every site-owned week (Schedule/Site Data/roster.json)
+  const [master,setMaster]=useState(null); // {roster, eTag, exists}
+  const masterRef=useRef(null);
+  const masterPromise=useRef(null);
+  const [seasonStatus,setSeasonStatus]=useState({});
+  const weeksCacheRef=useRef(weeksCache);
+  useEffect(()=>{weeksCacheRef.current=weeksCache;},[weeksCache]);
   // Schedule search: query + Day/Month scope + month view (jobs or a role) + open person.
   // Lives here so it survives switching tabs.
   // Deep links: #pm=D or #person=<roster name> open that person's month
@@ -224,12 +226,53 @@ export default function App(){
     if(prevSat&&!weeksCache[prevSat]) fetchWeek(prevSat,{once:true});
   },[mode,currentWeekSat]);
 
+  // 2027 onward the site owns the data (JSON in SharePoint); earlier weeks
+  // still come from the Excel log books.
+  async function loadWeekData(satKey,{freshRoster=false}={}){
+    if(isStoreWeek(satKey)){
+      let m=await ensureMaster();
+      if(freshRoster){
+        // Pick up roster changes other people saved
+        try{ const f=await loadRoster(); if(f.exists&&f.eTag!==m.eTag){ applyMaster(f); recomposeAll(f.roster); m=f; } }catch{ /* keep the one we have */ }
+      }
+      return loadStoreWeek(satKey,m.roster);
+    }
+    return fetchScheduleFromSharePoint(new Date(satKey+'T12:00:00'));
+  }
+  function applyMaster(m){ masterRef.current=m; setMaster(m); }
+  // Load the global roster; the first time, start it from the newest
+  // Excel log book roster and save it so everyone shares the same one.
+  async function ensureMaster(){
+    if(masterRef.current) return masterRef.current;
+    if(!masterPromise.current) masterPromise.current=(async()=>{
+      let m=await loadRoster();
+      if(!m.exists){
+        const roster=(await bootstrapRoster())||emptyRoster();
+        try{ m=await saveRoster(roster,{exists:false}); }
+        catch(e){ m=e.conflict?await loadRoster():{roster,eTag:null,exists:false}; }
+      }
+      applyMaster(m);
+      return m;
+    })().catch(e=>{masterPromise.current=null;throw e;});
+    return masterPromise.current;
+  }
+  async function bootstrapRoster(){
+    const cache=weeksCacheRef.current;
+    const keys=Object.keys(cache).filter(k=>!isStoreWeek(k)&&k!==SAMPLE_SAT).sort().reverse();
+    for(const k of keys){ const r=rosterFromWeek(cache[k]); if(r) return r; }
+    let sat=INITIAL_SAT<STORE_START_SAT?INITIAL_SAT:prevWeekSatKey(STORE_START_SAT);
+    for(let i=0;i<10&&sat;i++,sat=prevWeekSatKey(sat)){
+      try{ const w=await fetchScheduleFromSharePoint(new Date(sat+'T12:00:00')); const r=rosterFromWeek(w); if(r) return r; }catch{ /* try the week before */ }
+    }
+    return null;
+  }
+
   async function refreshData(){
     const satKey=currentWeekSatRef.current;
     try {
       setError(null);
       setIsRefreshing(true);
-      const newData=await loadWeekData(satKey);
+      const newData=await loadWeekData(satKey,{freshRoster:true});
       let meta=null;
       if(newData._meta){meta=newData._meta;delete newData._meta;}
       if(meta) setFileMeta(meta);
@@ -293,7 +336,7 @@ export default function App(){
     for(let attempt=0;attempt<2;attempt++){
       try{
         const next=mutate(cloneWeek(base));
-        const {week,backup}=await saveStoreWeek(satKey,next,{eTag:meta.eTag,exists:!!meta.exists});
+        const {week,backup}=await saveStoreWeek(satKey,next,{eTag:meta.eTag,exists:!!meta.exists,roster:masterRef.current?.roster});
         const m=week._meta; delete week._meta;
         setStoreMeta(st=>({...st,[satKey]:m}));
         ingestWeek(satKey,week);
@@ -304,7 +347,7 @@ export default function App(){
       }catch(e){
         if(e.conflict&&attempt===0){
           try{
-            const fresh=await loadStoreWeek(satKey);
+            const fresh=await loadStoreWeek(satKey,masterRef.current?.roster);
             meta=fresh._meta||{}; delete fresh._meta; base=fresh;
             continue;
           }catch(e2){ setSaveState({status:"error",message:e2.message}); return false; }
@@ -315,18 +358,54 @@ export default function App(){
     }
     return false;
   }
-  async function startWeek(satKey){
-    setSaveState({status:"saving"});
-    try{
-      const prevSat=prevWeekSatKey(satKey);
-      let prev=weeksCache[prevSat];
-      if(!prev||!Object.keys(prev).length){
-        try{ prev=await loadWeekData(prevSat); delete prev._meta; }catch{ prev=null; }
+  // Save the global roster, show it on every loaded week, then rewrite
+  // the backup log books from this week on in the background.
+  async function editRoster(roster){
+    const m=masterRef.current||{};
+    let saved;
+    try{ saved=await saveRoster(roster,{eTag:m.eTag,exists:!!m.exists}); }
+    catch(e){
+      if(e.conflict){
+        try{ const fresh=await loadRoster(); applyMaster(fresh); recomposeAll(fresh.roster); }catch{ /* keep ours */ }
+        return "Someone else changed the roster while you were editing. Their version is loaded — close this and make your change again.";
       }
-      const seeded=seedWeek(satKey,prev);
-      return await editWeek(satKey,()=>seeded);
-    }catch(e){ setSaveState({status:"error",message:e.message}); return false; }
+      return e.message;
+    }
+    applyMaster(saved);
+    recomposeAll(saved.roster);
+    const fromSat=INITIAL_SAT>STORE_START_SAT?INITIAL_SAT:STORE_START_SAT;
+    setSaveState({status:"rebuilding",done:0,total:0});
+    rebuildBackups(fromSat,saved.roster,{onProgress:p=>setSaveState({status:"rebuilding",...p})})
+      .then(r=>setSaveState({status:"rebuilt",total:r.total,failed:r.failed}))
+      .catch(e=>setSaveState({status:"rebuilt",total:0,failed:[e.message]}));
+    return true;
   }
+  function recomposeAll(roster){
+    setWeeksCache(prev=>{
+      const next={...prev};
+      for(const k of Object.keys(prev)) if(isStoreWeek(k)&&Object.keys(prev[k]||{}).length) next[k]=composeWeek(k,roster,prev[k]);
+      return next;
+    });
+  }
+  async function checkSeason(year){
+    setSeasonStatus(st=>({...st,[year]:{...(st[year]||{}),state:st[year]?.state==="creating"?"creating":"checking"}}));
+    try{
+      const sats=seasonSaturdays(year);
+      const have=await listStoreWeeks([...new Set(sats.map(x=>x.slice(0,4)))]);
+      setSeasonStatus(st=>({...st,[year]:{...(st[year]||{}),state:st[year]?.state==="creating"?"creating":"ready",total:sats.length,existing:sats.filter(x=>have.has(x)).length}}));
+    }catch(e){ setSeasonStatus(st=>({...st,[year]:{state:"error",message:e.message}})); }
+  }
+  async function createAllWeeks(year){
+    try{
+      const m=await ensureMaster();
+      setSeasonStatus(st=>({...st,[year]:{...(st[year]||{}),state:"creating",done:0,todo:0}}));
+      const r=await createSeason(year,m.roster,{onProgress:p=>setSeasonStatus(st=>({...st,[year]:{...(st[year]||{}),state:"creating",done:p.done,todo:p.total}}))});
+      setSeasonStatus(st=>({...st,[year]:{...(st[year]||{}),state:"ready",failed:r.failed}}));
+      await checkSeason(year);
+      if(isStoreWeek(currentWeekSatRef.current)) refreshData();
+    }catch(e){ setSeasonStatus(st=>({...st,[year]:{state:"error",message:e.message}})); }
+  }
+
 
   const fetchingRef=useRef(new Set());
   const attemptedRef=useRef(new Set());
@@ -465,13 +544,14 @@ export default function App(){
   const noWeekData=Object.keys(data).length===0;
   const stats=[{v:totalJobs,l:"Jobs"},{v:totalMen,l:"Men"},{v:totalTrucks,l:"Trucks"}];
   const storeWeek=isStoreWeek(currentWeekSat);
-  const canEdit=mode==="live"&&storeWeek&&!!storeMeta[currentWeekSat]?.exists;
+  const canEdit=mode==="live"&&storeWeek&&!!storeMeta[currentWeekSat]&&!!master;
   const editSat=currentWeekSat;
   const editor=canEdit?{
     saveState,
     onAddJob:()=>setEditing({kind:"job",day:selectedDay,job:null}),
-    onEditJob:job=>setEditing({kind:"job",day:selectedDay,job}),
+    onEditJob:(job,tab)=>setEditing({kind:"job",day:selectedDay,job,tab:tab||"job"}),
     onEditRoster:()=>setEditing({kind:"roster",day:selectedDay}),
+    onEditOut:()=>setEditing({kind:"out",day:selectedDay}),
     onEditNotes:()=>setEditing({kind:"notes",day:selectedDay}),
   }:null;
   const closeEditor=()=>setEditing(null);
@@ -527,8 +607,6 @@ export default function App(){
               <div style={{display:"flex",justifyContent:"center",marginBottom:14}}><Spinner size={28}/></div>
               <div style={{fontSize:15}}>Loading {satKeyToLabel(currentWeekSat)}…</div>
             </div>
-          : noWeekData&&storeWeek&&mode==="live"&&storeMeta[currentWeekSat]&&!storeMeta[currentWeekSat].exists&&!["month","changes","people"].includes(activeTab)&&!(activeTab==="schedule"&&search.scope==="month")
-            ? <StoreWeekEmpty weekLabel={satKeyToLabel(currentWeekSat)} saveState={saveState} backupPath={backupPath(currentWeekSat)} onStart={()=>startWeek(currentWeekSat)}/>
           : noWeekData&&!["month","changes","people"].includes(activeTab)&&!(activeTab==="schedule"&&search.scope==="month")
             ? <div style={{padding:"72px 20px",textAlign:"center"}}>
                 <div style={{fontSize:17,fontWeight:600}}>{mode==="live"?"No log book for this week":"Sign in to load this week"}</div>
@@ -549,13 +627,15 @@ export default function App(){
                   <WeekStrip data={data} selectedDay={selectedDay} setSelectedDay={setSelectedDay} weekLabel={weekLabel}
                     onPrev={()=>navigateWeek(-1)} onNext={()=>navigateWeek(1)} onToday={goToCurrentWeek} showToday={currentWeekSat!==INITIAL_SAT}
                     loading={loadingWeek===currentWeekSat} isMobile={isMobile}/>
-                  {editor&&<EditBar dayName={selectedDay} notes={cur?.notes} saveState={saveState} isMobile={isMobile} showAddJob={false}
-                    onEditRoster={editor.onEditRoster} onEditNotes={editor.onEditNotes}/>}
+                  {editor&&<EditBar dayName={selectedDay} notes={cur?.notes} saveState={saveState} isMobile={isMobile} showAddJob={false} outCount={(cur?.out||[]).length}
+                    onEditRoster={editor.onEditRoster} onEditOut={editor.onEditOut} onEditNotes={editor.onEditNotes}/>}
                   <RosterTab crews={cur?.crews} pools={cur?.pools} unavailable={cur?.unavailable} unassigned={cur?.unassigned} jobs={cur?.jobs} allData={data}
                     isMobile={isMobile} monthName={(cur?.date?new Date(cur.date+"T12:00:00"):new Date()).toLocaleDateString("en-US",{month:"long"})} onOpenMonth={openPersonMonth}/>
                 </>}
                 {activeTab==="week"&&<WeekTab data={data} selectedDay={selectedDay} isMobile={isMobile} onSelectDay={d=>{setSelectedDay(d);setActiveTab("schedule");setSearch(st=>({...st,scope:"day",fromMonth:false}));}}/>}
-                {activeTab==="month"&&<MonthTab weeksCache={weeksCache} weekStatus={weekStatus} monthCursor={monthCursor} setMonthCursor={setMonthCursor} onPickDay={pickCalendarDay} mode={mode} requestWeek={fetchWeek} isMobile={isMobile} onSearchMonth={searchMonth}/>}
+                {activeTab==="month"&&<MonthTab weeksCache={weeksCache} weekStatus={weekStatus} monthCursor={monthCursor} setMonthCursor={setMonthCursor} onPickDay={pickCalendarDay} mode={mode} requestWeek={fetchWeek} isMobile={isMobile} onSearchMonth={searchMonth}
+                  seasonPanel={mode==="live"&&monthCursor.getFullYear()>=+STORE_START_SAT.slice(0,4)?<SeasonPanel year={monthCursor.getFullYear()} status={seasonStatus[monthCursor.getFullYear()]}
+                    onCheck={()=>checkSeason(monthCursor.getFullYear())} onCreate={()=>createAllWeeks(monthCursor.getFullYear())}/>:null}/>}
                 {activeTab==="changes"&&<ChangesTab changeLog={changeLog} onClear={()=>setChangeLog([])} isMobile={isMobile}/>}
                 {activeTab==="people"&&<Suspense fallback={<PanelFallback/>}>
                   <ProfilesPanel weekData={data} onStoreChange={setProfiles}/>
@@ -578,11 +658,12 @@ export default function App(){
       </footer>
 
       {canEdit&&<>
-        <JobEditorSheet open={editing?.kind==="job"} onClose={closeEditor} isMobile={isMobile} week={data} dayName={editing?.day||selectedDay} job={editing?.job||null}
+        <JobEditorSheet open={editing?.kind==="job"} onClose={closeEditor} isMobile={isMobile} week={data} dayName={editing?.day||selectedDay} job={editing?.job||null} initialTab={editing?.tab||"job"}
           onSave={(day,job,opts)=>editWeek(editSat,w=>upsertJob(w,day,job,opts))}
           onDelete={(day,id)=>editWeek(editSat,w=>deleteJob(w,day,id))}/>
-        <RosterEditorSheet open={editing?.kind==="roster"} onClose={closeEditor} isMobile={isMobile} dayName={editing?.day||selectedDay} dayData={data[editing?.day||selectedDay]}
-          onSave={(roster,applyTo)=>editWeek(editSat,w=>setRoster(w,editing.day,roster,applyTo))}/>
+        <RosterEditorSheet open={editing?.kind==="roster"} onClose={closeEditor} isMobile={isMobile} roster={master?.roster} onSave={editRoster}/>
+        <OutSheet open={editing?.kind==="out"} onClose={closeEditor} isMobile={isMobile} roster={master?.roster} week={data} dayName={editing?.day||selectedDay}
+          onSave={(out,also)=>editWeek(editSat,w=>setOut(w,editing.day,out,also))}/>
         <NotesSheet open={editing?.kind==="notes"} onClose={closeEditor} isMobile={isMobile} dayName={editing?.day||selectedDay} notes={data[editing?.day||selectedDay]?.notes}
           onSave={notes=>editWeek(editSat,w=>setNotes(w,editing.day,notes))}/>
       </>}
