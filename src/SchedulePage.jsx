@@ -29,8 +29,8 @@ export function WeekStrip({ data, selectedDay, setSelectedDay, weekLabel, onPrev
           const isSel = d === selectedDay;
           const n = (dd?.jobs || []).filter(j => !j.cancelled).length;
           const num = ds ? Number(ds.slice(8)) : '–';
-          const circleBg = isSel ? (isToday ? SYS.red : A.label) : 'transparent';
-          const numColor = isSel ? (isToday ? '#fff' : '#000') : isToday ? SYS.red : ds ? A.label : A.label3;
+          const circleBg = isSel ? (isToday ? SYS.red : 'var(--ap-selected)') : 'transparent';
+          const numColor = isSel ? (isToday ? '#fff' : 'var(--ap-on-selected)') : isToday ? SYS.red : ds ? A.label : A.label3;
           return (
             <button key={d} role="tab" aria-selected={isSel} onClick={() => setSelectedDay(d)} className="ap-btn ap-press"
               aria-label={`${d}${ds ? `, ${new Date(ds + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}` : ''}, ${n} ${n === 1 ? 'job' : 'jobs'}`}
@@ -51,7 +51,7 @@ export function WeekStrip({ data, selectedDay, setSelectedDay, weekLabel, onPrev
 }
 
 export default function SchedulePage({
-  data, weeksCache, currentWeekSat, weekLabel, selectedDay, setSelectedDay, onPrevWeek, onNextWeek, onToday, isCurrentWeek,
+  data, weeksCache, currentWeekSat, weekLabel, selectedDay, setSelectedDay, onPrevWeek, onNextWeek, onToday, showToday, focus, onJumpDate,
   loadingWeek, flashedJobs, isMobile, mode, profiles, weekStatus, requestWeek, monthCursor, setMonthCursor,
   search, setSearch, onOpenDay, editor,
 }) {
@@ -107,7 +107,7 @@ export default function SchedulePage({
             </PlainButton>
           )}
           <WeekStrip data={data} selectedDay={selectedDay} setSelectedDay={setSelectedDay} weekLabel={weekLabel}
-            onPrev={onPrevWeek} onNext={onNextWeek} onToday={onToday} showToday={!isCurrentWeek}
+            onPrev={onPrevWeek} onNext={onNextWeek} onToday={onToday} showToday={showToday}
             loading={loadingWeek === currentWeekSat} isMobile={isMobile} />
           {cur?.date && (
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
@@ -122,7 +122,7 @@ export default function SchedulePage({
         </>
       ) : (
         <MonthSearch weeksCache={weeksCache} weekStatus={weekStatus} requestWeek={requestWeek} mode={mode} profiles={profiles}
-          monthCursor={monthCursor} setMonthCursor={setMonthCursor} query={search.query}
+          monthCursor={monthCursor} setMonthCursor={setMonthCursor} query={search.query} focus={focus} onJumpDate={onJumpDate} onToday={onToday}
           view={search.view} setView={v => set({ view: v })} personKey={search.person} setPersonKey={k => set({ person: k })}
           onOpenDay={onOpenDay} isMobile={isMobile} />
       )}

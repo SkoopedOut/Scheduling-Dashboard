@@ -27,7 +27,7 @@ export function EditBar({ dayName, onAddJob, onEditRoster, onEditOut, onEditNote
         <SaveStatus state={saveState} />
       </div>
       {notes && (
-        <div style={{ marginTop: 12, background: A.cell, borderRadius: 12, padding: '10px 14px', fontSize: 14, color: A.label2, whiteSpace: 'pre-wrap', lineHeight: 1.45 }}>
+        <div className="glass" style={{ marginTop: 12, padding: '10px 14px', fontSize: 14, color: A.label2, whiteSpace: 'pre-wrap', lineHeight: 1.45 }}>
           <span style={{ color: A.label, fontWeight: 600 }}>Scheduler notes </span>{notes}
         </div>
       )}
@@ -53,7 +53,7 @@ export function SeasonPanel({ year, status, onCreate, onCheck }) {
   const busy = st.state === 'creating';
   const complete = st.total != null && st.existing >= st.total;
   return (
-    <div style={{ background: A.cell, borderRadius: 12, padding: '12px 16px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+    <div className="glass" style={{ padding: '12px 16px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
       <Icon name="calendar" size={20} color={SYS.blue} />
       <div style={{ flex: 1, minWidth: 220 }}>
         <div style={{ fontSize: 15, fontWeight: 600 }}>{year} season</div>
@@ -162,13 +162,13 @@ export function JobEditorSheet({ open, onClose, week, dayName, job, onSave, onDe
             <FormRow first label="Job #" hint={taken ? `Taken by ${taken.customer}` : 'Slot number on the log book'}>
               <TextInput value={form.num} onChange={v => set({ num: v.replace(/[^\d]/g, '') })} invalid={!!taken} style={{ width: 80, textAlign: 'center' }} ariaLabel="Job number" />
             </FormRow>
-            <FormRow stacked label="Customer / job name"><TextInput value={form.customer} onChange={v => set({ customer: v })} placeholder="Hilton Back Bay" /></FormRow>
-            <FormRow stacked label="PO # / job #"><TextInput value={form.poJob} onChange={v => set({ poJob: v })} placeholder="16332" /></FormRow>
-            <FormRow stacked label="Location / address"><TextInput value={form.location} onChange={v => set({ location: v })} placeholder="40 Dalton St Boston" /></FormRow>
+            <FormRow stacked label="Customer / job name"><TextInput value={form.customer} onChange={v => set({ customer: v })} placeholder="Customer or job name" /></FormRow>
+            <FormRow stacked label="PO # / job #"><TextInput value={form.poJob} onChange={v => set({ poJob: v })} placeholder="PO or job number" /></FormRow>
+            <FormRow stacked label="Location / address"><TextInput value={form.location} onChange={v => set({ location: v })} placeholder="Street address, city" /></FormRow>
             <FormRow label="Onsite time" hint={isOvertimeStart(form.onsiteTime) ? 'Overtime start' : undefined}>
-              <TextInput value={form.onsiteTime} onChange={v => set({ onsiteTime: v })} placeholder="6:30am" style={{ width: 120 }} ariaLabel="Onsite time" />
+              <TextInput value={form.onsiteTime} onChange={v => set({ onsiteTime: v })} placeholder="Start time" style={{ width: 120 }} ariaLabel="Onsite time" />
             </FormRow>
-            <FormRow label="Trucks"><TextInput value={form.trucks} onChange={v => set({ trucks: v })} placeholder="Hub 5 or na" style={{ width: 150 }} ariaLabel="Trucks" /></FormRow>
+            <FormRow label="Trucks"><TextInput value={form.trucks} onChange={v => set({ trucks: v })} placeholder="Truck # or na" style={{ width: 150 }} ariaLabel="Trucks" /></FormRow>
             <FormRow label="# of men" hint={`Leave blank to use the crew count (${persons})`}>
               <TextInput value={form.numMen} onChange={v => set({ numMen: v })} placeholder={String(persons)} style={{ width: 80, textAlign: 'center' }} ariaLabel="Number of men" />
             </FormRow>
@@ -180,8 +180,8 @@ export function JobEditorSheet({ open, onClose, week, dayName, job, onSave, onDe
             <FormRow stacked label="Job folder">
               <Segmented ariaLabel="Job folder" value={form.jobFolder} onChange={v => set({ jobFolder: v })} options={FOLDER_OPTS} />
             </FormRow>
-            <FormRow stacked label="Trash coming back"><TextInput value={form.trash} onChange={v => set({ trash: v })} placeholder="2 carts" /></FormRow>
-            <FormRow stacked label="Driver emptying truck & W/H arrival"><TextInput value={form.driverReturn} onChange={v => set({ driverReturn: v })} placeholder="Weeb ~3pm" /></FormRow>
+            <FormRow stacked label="Trash coming back"><TextInput value={form.trash} onChange={v => set({ trash: v })} placeholder="What’s coming back, if anything" /></FormRow>
+            <FormRow stacked label="Driver emptying truck & W/H arrival"><TextInput value={form.driverReturn} onChange={v => set({ driverReturn: v })} placeholder="Driver and about when" /></FormRow>
             <FormRow label="Cancelled" hint="Shows struck through"><Switch checked={form.cancelled} onChange={v => set({ cancelled: v })} ariaLabel="Cancelled" /></FormRow>
           </Group>
 

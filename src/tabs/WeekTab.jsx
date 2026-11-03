@@ -74,9 +74,9 @@ export default function WeekTab({ data, selectedDay, onSelectDay, isMobile }) {
           const isSel = x.d === selectedDay;
           const shown = x.list.slice(0, 5);
           return (
-            <button key={x.d} type="button" onClick={() => onSelectDay(x.d)} className="ap-btn ap-press" aria-label={`${x.d}: ${x.jobs} jobs, ${x.men} men — open`}
-              style={{ display: 'flex', flexDirection: 'column', textAlign: 'left', background: A.cell, borderRadius: 12, border: 'none', padding: 14, cursor: 'pointer', color: 'inherit',
-                boxShadow: isSel ? `inset 0 0 0 2px ${SYS.blue}` : 'none', minHeight: 330 }}>
+            <button key={x.d} type="button" onClick={() => onSelectDay(x.d)} className="ap-btn ap-press glass" aria-label={`${x.d}: ${x.jobs} jobs, ${x.men} men — open`}
+              style={{ display: 'flex', flexDirection: 'column', textAlign: 'left', border: 'none', padding: 14, cursor: 'pointer', color: 'inherit',
+                boxShadow: isSel ? `inset 0 0 0 2px ${SYS.blue}, var(--glass-shadow)` : undefined, minHeight: 330 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: isToday ? SYS.red : A.label2 }}>{x.d.slice(0, 3)}</div>
               <div className="tnum" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 38, height: 38, marginLeft: -4, borderRadius: '50%', fontSize: 24, fontWeight: 600,
                 background: isToday ? SYS.red : 'transparent', color: isToday ? '#fff' : A.label }}>{x.date ? Number(x.date.slice(8)) : '–'}</div>

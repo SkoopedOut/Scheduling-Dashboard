@@ -2,13 +2,13 @@
 
 ## What This Is
 
-A live scheduling dashboard that pulls your weekly log book Excel files from SharePoint and displays them on a self-refreshing web page. Every team member can open it in their browser and see today's jobs, crew assignments, and the full week — updated automatically every 5 minutes.
+A live scheduling dashboard that pulls your weekly log book Excel files from SharePoint and displays them on a self-refreshing web page. Every team member can open it in their browser and see today's jobs, crew assignments, and the full week — updated automatically every 2 minutes.
 
 ---
 
-## Quick Start (Demo Mode)
+## What you see on first load
 
-The dashboard works immediately with sample data so you can see it before connecting SharePoint.
+The dashboard has no sample or demo data. Until it is connected to Microsoft 365 and you are signed in, it shows a short sign-in screen that explains what the dashboard is and has a single **Sign in with Microsoft** button. Everything on screen after that comes from your SharePoint log books.
 
 ---
 
@@ -40,7 +40,7 @@ The dashboard works immediately with sample data so you can see it before connec
    │   ├── App.jsx
    │   ├── auth.js          ← You'll edit this
    │   ├── sharepoint.js    ← You'll edit this
-   │   └── sampleData.js
+   │   └── SignIn.jsx
    ├── index.html
    ├── package.json         ← Edit the "homepage" field
    ├── vite.config.js
@@ -71,7 +71,7 @@ After the workflow runs (1-2 minutes), your dashboard will be live at:
 https://YOUR_GITHUB_USERNAME.github.io/scheduling-dashboard/
 ```
 
-At this point it shows **demo data**. Next, we connect SharePoint.
+At this point it shows the sign-in screen, with a note that it isn't connected to Microsoft yet. Next, we connect SharePoint.
 
 ---
 
@@ -176,7 +176,7 @@ From each day's tab in the Excel file:
 
 | Problem | Solution |
 |---------|----------|
-| "DEMO ONLY" button instead of "SIGN IN" | Update CLIENT_ID and TENANT_ID in `src/auth.js` |
+| Sign-in screen says "isn't connected to Microsoft yet" | Update CLIENT_ID and TENANT_ID in `src/auth.js` |
 | Login popup blocked | Allow popups for github.io in your browser |
 | "Sites.Read.All" permission denied | Ask your Microsoft 365 admin to grant admin consent |
 | File not found error | Check that the folder name matches `MM Month YY` format |
@@ -192,7 +192,7 @@ From each day's tab in the Excel file:
 src/
   auth.js         → Microsoft SSO login (MSAL)
   sharepoint.js   → Fetches & parses Excel from SharePoint via Graph API
-  sampleData.js   → Demo data (used when not connected)
+  SignIn.jsx      → Entry screen shown before sign-in
   App.jsx         → Main dashboard UI
   main.jsx        → React entry point
 ```
@@ -201,7 +201,7 @@ src/
 
 ## Updating Foreman Crews
 
-If your foreman list changes, update `FOREMAN_ORDER` in `src/sampleData.js` and `src/sharepoint.js`. The dashboard uses this list to identify foremen in the roster columns and highlight them in the schedule view.
+If your foreman list changes, update `FOREMAN_ORDER` in `src/sharepoint.js` (the parser uses it to identify foremen in the roster columns). In the schedule view, foremen are read from each week's roster, so no list is kept in the UI.
 
 ---
 

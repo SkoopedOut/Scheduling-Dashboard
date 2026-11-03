@@ -7,44 +7,113 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { SYS, PM_COLORS } from '../scheduleUtils.js';
 
+// Every color is a CSS variable so one stylesheet can switch the whole app
+// between dark and light (see THEME_VARS below). The JS tokens are just
+// pointers to those variables.
 export const A = {
   ...SYS,
-  bg: '#000000',
-  cell: '#1C1C1E',          // secondarySystemGroupedBackground
-  cell2: '#2C2C2E',         // tertiarySystemGroupedBackground
-  cell3: '#3A3A3C',
-  label: '#FFFFFF',
-  label2: 'rgba(235,235,245,0.6)',
-  label3: 'rgba(235,235,245,0.3)',
-  label4: 'rgba(235,235,245,0.18)',
-  sep: 'rgba(84,84,88,0.65)',
-  fill: 'rgba(120,120,128,0.36)',
-  fill2: 'rgba(120,120,128,0.32)',
-  fill3: 'rgba(118,118,128,0.24)',
-  fill4: 'rgba(116,116,128,0.18)',
+  bg: 'var(--ap-bg)',
+  cell: 'var(--ap-cell)',           // glass panel fill
+  cell2: 'var(--ap-cell2)',         // inset group inside a panel or sheet
+  cell3: 'var(--ap-cell3)',
+  cellSolid: 'var(--ap-cell-solid)', // opaque stand-in (ring gaps, fallbacks)
+  label: 'var(--ap-label)',
+  label2: 'var(--ap-label2)',
+  label3: 'var(--ap-label3)',
+  label4: 'var(--ap-label4)',
+  sep: 'var(--ap-sep)',
+  fill: 'var(--ap-fill)',
+  fill2: 'var(--ap-fill2)',
+  fill3: 'var(--ap-fill3)',
+  fill4: 'var(--ap-fill4)',
   tint: SYS.blue,
   font: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Inter, system-ui, sans-serif',
-  bar: 'rgba(22,22,24,0.78)', // translucent bar material
+  bar: 'var(--ap-bar)',              // translucent bar material
+  thumb: 'var(--ap-thumb)',          // segmented-control thumb
 };
 
-// Hex color + alpha (0–1) → #RRGGBBAA
-export function tint(hex, a) {
-  const h = Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, '0');
-  return `${hex}${h}`;
+// Translucent version of any color — a hex value or one of the CSS
+// variables above. color-mix keeps the variable live, so tints follow the
+// theme too.
+export function tint(color, a) {
+  const pct = Math.round(Math.max(0, Math.min(1, a)) * 100);
+  return `color-mix(in srgb, ${color} ${pct}%, transparent)`;
 }
 
-// Global stylesheet for the Apple look — injected once by the app shell.
-export const APPLE_CSS = `
-  html, body { background:${A.bg}; }
-  body { font-family:${A.font}; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; letter-spacing:-0.01em; }
+// ── Theme variables ──────────────────────────────────────────
+// Dark is the base set; light overrides it. The app follows the system
+// appearance until the person picks one (data-theme on <html>, set by
+// ui/theme.jsx and by the boot script in index.html).
+const DARK = {
+  'sys-blue': '#0A84FF', 'sys-green': '#30D158', 'sys-indigo': '#5E5CE6', 'sys-orange': '#FF9F0A', 'sys-pink': '#FF375F',
+  'sys-purple': '#BF5AF2', 'sys-red': '#FF453A', 'sys-teal': '#40C8E0', 'sys-cyan': '#64D2FF', 'sys-yellow': '#FFD60A',
+  'sys-mint': '#66D4CF', 'sys-brown': '#AC8E68', 'sys-gray': '#8E8E93',
+  'ap-bg': '#05060B',
+  'ap-bg-image': 'radial-gradient(60% 50% at 10% 6%, rgba(10,132,255,0.30), transparent 70%), radial-gradient(55% 45% at 92% 10%, rgba(94,92,230,0.28), transparent 70%), radial-gradient(60% 50% at 82% 94%, rgba(255,55,95,0.15), transparent 70%), radial-gradient(55% 45% at 6% 92%, rgba(64,200,224,0.17), transparent 70%)',
+  'ap-cell': 'rgba(32,33,40,0.56)', 'ap-cell2': 'rgba(120,120,128,0.20)', 'ap-cell3': 'rgba(120,120,128,0.45)', 'ap-cell-solid': '#1B1C22',
+  'ap-label': '#FFFFFF', 'ap-label2': 'rgba(235,235,245,0.64)', 'ap-label3': 'rgba(235,235,245,0.34)', 'ap-label4': 'rgba(235,235,245,0.20)',
+  'ap-sep': 'rgba(235,235,245,0.14)',
+  'ap-fill': 'rgba(120,120,128,0.36)', 'ap-fill2': 'rgba(120,120,128,0.32)', 'ap-fill3': 'rgba(118,118,128,0.26)', 'ap-fill4': 'rgba(116,116,128,0.18)',
+  'ap-bar': 'rgba(24,25,31,0.62)',
+  'ap-thumb': 'rgba(150,150,162,0.55)',
+  'ap-xmark': '#1B1C22',
+  'ap-hover': 'rgba(255,255,255,0.06)', 'ap-press': 'rgba(255,255,255,0.11)',
+  'ap-scrim': 'rgba(0,0,0,0.5)',
+  'glass-bg': 'rgba(34,35,43,0.50)', 'glass-bg-strong': 'rgba(30,31,38,0.74)', 'glass-solid': '#1F2027',
+  'glass-border': 'rgba(255,255,255,0.13)', 'glass-rim': 'rgba(255,255,255,0.24)',
+  'glass-sheen': 'rgba(255,255,255,0.10)', 'glass-glint': 'rgba(255,255,255,0.12)',
+  'glass-shadow': '0 1px 1px rgba(0,0,0,0.30), 0 8px 24px rgba(0,0,0,0.32), 0 24px 56px rgba(0,0,0,0.26)',
+  'ap-on-fill': '#FFFFFF', 'ap-selected': '#FFFFFF', 'ap-on-selected': '#000000',
+};
+const LIGHT = {
+  'sys-blue': '#0071E3', 'sys-green': '#1E8E3E', 'sys-indigo': '#4F4DCC', 'sys-orange': '#C25B00', 'sys-pink': '#D12B5B',
+  'sys-purple': '#9440BE', 'sys-red': '#D92D20', 'sys-teal': '#00859B', 'sys-cyan': '#007EAE', 'sys-yellow': '#A86B00',
+  'sys-mint': '#0B8A84', 'sys-brown': '#7F6545', 'sys-gray': '#6E6E73',
+  'ap-bg': '#EDF0F7',
+  'ap-bg-image': 'radial-gradient(60% 50% at 8% 4%, rgba(0,113,227,0.24), transparent 70%), radial-gradient(55% 45% at 94% 8%, rgba(148,64,190,0.18), transparent 70%), radial-gradient(60% 50% at 84% 96%, rgba(255,120,150,0.20), transparent 70%), radial-gradient(55% 45% at 4% 94%, rgba(70,190,230,0.26), transparent 70%)',
+  'ap-cell': 'rgba(255,255,255,0.58)', 'ap-cell2': 'rgba(120,120,128,0.12)', 'ap-cell3': 'rgba(120,120,128,0.35)', 'ap-cell-solid': '#F8F9FC',
+  'ap-label': '#0B0C10', 'ap-label2': 'rgba(40,42,56,0.68)', 'ap-label3': 'rgba(40,42,56,0.42)', 'ap-label4': 'rgba(40,42,56,0.22)',
+  'ap-sep': 'rgba(60,60,67,0.16)',
+  'ap-fill': 'rgba(120,120,128,0.24)', 'ap-fill2': 'rgba(120,120,128,0.20)', 'ap-fill3': 'rgba(120,120,128,0.14)', 'ap-fill4': 'rgba(120,120,128,0.09)',
+  'ap-bar': 'rgba(250,251,254,0.66)',
+  'ap-thumb': 'rgba(255,255,255,0.95)',
+  'ap-xmark': '#F8F9FC',
+  'ap-hover': 'rgba(20,30,70,0.05)', 'ap-press': 'rgba(20,30,70,0.10)',
+  'ap-scrim': 'rgba(30,40,70,0.30)',
+  'glass-bg': 'rgba(255,255,255,0.52)', 'glass-bg-strong': 'rgba(252,253,255,0.80)', 'glass-solid': '#F7F8FC',
+  'glass-border': 'rgba(255,255,255,0.75)', 'glass-rim': 'rgba(255,255,255,0.95)',
+  'glass-sheen': 'rgba(255,255,255,0.70)', 'glass-glint': 'rgba(255,255,255,0.55)',
+  'glass-shadow': '0 1px 1px rgba(20,30,70,0.06), 0 6px 18px rgba(30,40,90,0.10), 0 22px 48px rgba(30,40,90,0.10)',
+  'ap-on-fill': '#FFFFFF', 'ap-selected': '#0B0C10', 'ap-on-selected': '#FFFFFF',
+};
+const vars = o => Object.entries(o).map(([k, v]) => `--${k}:${v};`).join('');
+export const THEME_VARS = `
+  :root { ${vars(DARK)} color-scheme: dark; }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { ${vars(LIGHT)} color-scheme: light; } }
+  :root[data-theme="light"] { ${vars(LIGHT)} color-scheme: light; }
+  :root[data-theme="dark"] { ${vars(DARK)} color-scheme: dark; }
+`;
+
+// Global stylesheet for the Apple "liquid glass" look — injected once by the app shell.
+export const APPLE_CSS = THEME_VARS + `
+  html { background:${A.bg}; }
+  body { margin:0; background:transparent; color:${A.label}; font-family:${A.font}; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; letter-spacing:-0.01em; }
+  /* Ambient color the glass refracts. Fixed, so panels pick up different tints as they scroll over it. */
+  body::before { content:''; position:fixed; inset:0; z-index:-1; pointer-events:none; background:var(--ap-bg-image); }
+  .ap-ambient { background:var(--ap-bg-image), var(--ap-bg); }
+  ::-webkit-scrollbar { width:8px; height:8px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+  ::-webkit-scrollbar-thumb { background:${A.fill}; border-radius:4px; }
   .tnum { font-variant-numeric: tabular-nums; }
   .ap-btn { font-family:inherit; -webkit-tap-highlight-color:transparent; }
   .ap-btn:focus-visible, .ap-focus:focus-visible { outline:3px solid ${tint(SYS.blue, 0.55)}; outline-offset:2px; }
   .ap-press:active { opacity:0.55; }
+  .ap-datejump:focus-within { outline:3px solid ${tint(SYS.blue, 0.55)}; outline-offset:2px; }
+  .ap-datejump input::-webkit-calendar-picker-indicator { position:absolute; inset:0; width:100%; height:100%; cursor:pointer; }
   .ap-row { transition: background-color .12s ease; }
-  .ap-row:hover { background-color: rgba(255,255,255,0.045); }
+  .ap-row:hover { background-color: var(--ap-hover); }
   .ap-row.ap-tap { cursor:pointer; }
-  .ap-row.ap-tap:active { background-color: rgba(255,255,255,0.09); }
+  .ap-row.ap-tap:active { background-color: var(--ap-press); }
   .ap-search::placeholder { color:${A.label2}; }
   .ap-search::-webkit-search-cancel-button { display:none; }
   .ap-hscroll { scrollbar-width:none; }
@@ -52,9 +121,34 @@ export const APPLE_CSS = `
   @keyframes apSpin { to { transform: rotate(360deg); } }
   @keyframes apFade { from { opacity:0; transform: translateY(4px); } to { opacity:1; transform:none; } }
   .ap-fade { animation: apFade .22s ease-out both; }
+
+  /* ── Liquid glass ─────────────────────────────────────────
+     A frosted, translucent panel: it blurs and saturates whatever is
+     behind it, carries a thin bright rim along the top edge (the
+     specular highlight), a soft diagonal sheen, and layered shadows for
+     depth. Corners are ~16px. */
+  .glass, .glass-strong { position:relative; isolation:isolate; border-radius:16px;
+    background:var(--glass-bg);
+    -webkit-backdrop-filter: blur(28px) saturate(180%); backdrop-filter: blur(28px) saturate(180%);
+    box-shadow: var(--glass-shadow), inset 0 0 0 0.5px var(--glass-border), inset 0 1px 0 var(--glass-rim); }
+  .glass-strong { background:var(--glass-bg-strong); -webkit-backdrop-filter: blur(40px) saturate(190%); backdrop-filter: blur(40px) saturate(190%); }
+  .glass::before, .glass-strong::before { content:''; position:absolute; inset:0; border-radius:inherit; z-index:-1; pointer-events:none;
+    background: linear-gradient(160deg, var(--glass-sheen) 0%, transparent 34%),
+                radial-gradient(90% 60% at 0% 0%, var(--glass-glint), transparent 60%); }
+  /* Bars (toolbar, tab bar, sheet headers): glass without the floating shadow */
+  .glass-bar { background:var(--ap-bar); -webkit-backdrop-filter: blur(30px) saturate(180%); backdrop-filter: blur(30px) saturate(180%); }
+  /* Small controls: a raised glass pill */
+  .glass-pill { box-shadow: inset 0 1px 0 var(--glass-rim), inset 0 0 0 0.5px var(--glass-border), 0 1px 3px rgba(0,0,0,0.14), 0 4px 10px rgba(0,0,0,0.08); }
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .glass, .glass-strong, .glass-bar { background:var(--glass-solid); }
+  }
+  @media (prefers-reduced-transparency: reduce) {
+    .glass, .glass-strong, .glass-bar { background:var(--glass-solid); -webkit-backdrop-filter:none; backdrop-filter:none; }
+    .glass::before, .glass-strong::before { display:none; }
+  }
   @media (prefers-reduced-motion: reduce) {
     .ap-fade { animation:none; }
-    * { transition-duration: 0s !important; }
+    * { transition-duration: 0s !important; scroll-behavior:auto !important; }
   }
 `;
 
@@ -63,7 +157,7 @@ const P = {
   chevronLeft: <path d="M15 5l-7 7 7 7" />,
   chevronRight: <path d="M9 5l7 7-7 7" />,
   search: <><circle cx="10.5" cy="10.5" r="6.5" /><path d="M15.5 15.5L20 20" /></>,
-  xmarkCircle: <><circle cx="12" cy="12" r="9" fill="currentColor" stroke="none" /><path d="M9 9l6 6M15 9l-6 6" stroke="#1C1C1E" strokeWidth="2" /></>,
+  xmarkCircle: <><circle cx="12" cy="12" r="9" fill="currentColor" stroke="none" /><path d="M9 9l6 6M15 9l-6 6" stroke="var(--ap-xmark)" strokeWidth="2" /></>,
   tv: <><rect x="3" y="5" width="18" height="12" rx="2.5" /><path d="M8 20.5h8" /></>,
   refresh: <><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3" /><path d="M19.5 4.5v4.2h-4.2" /></>,
   calendar: <><rect x="3.5" y="5" width="17" height="15.5" rx="3" /><path d="M3.5 10h17M8 3v4M16 3v4" /></>,
@@ -90,6 +184,10 @@ const P = {
   phone: <path d="M6.5 3.5h3l1.5 4-2 1.5a11 11 0 0 0 6 6l1.5-2 4 1.5v3a2 2 0 0 1-2 2A16 16 0 0 1 4.5 5.5a2 2 0 0 1 2-2z" />,
   envelope: <><rect x="3" y="5.5" width="18" height="13" rx="2.5" /><path d="M4 7l8 6 8-6" /></>,
   doc: <><path d="M6 3.5h8l4 4v13H6z" /><path d="M14 3.5v4h4M9 12h6M9 15.5h6" /></>,
+  sun: <><circle cx="12" cy="12" r="4.2" /><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7" /></>,
+  moon: <path d="M20 14.2A8.2 8.2 0 0 1 9.8 4a8.2 8.2 0 1 0 10.2 10.2z" />,
+  halfCircle: <><circle cx="12" cy="12" r="8.5" /><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor" stroke="none" /></>,
+  calendarGoto: <><rect x="3.5" y="5" width="17" height="15.5" rx="3" /><path d="M3.5 10h17M8 3v4M16 3v4" /><path d="M9 15.2h6M12.6 12.8l2.4 2.4-2.4 2.4" /></>,
   twoArrows: <><path d="M4 8h14M14.5 4.5L18 8l-3.5 3.5M20 16H6M9.5 12.5L6 16l3.5 3.5" /></>,
 };
 export function Icon({ name, size = 18, color = 'currentColor', weight = 1.9, style, title }) {
@@ -186,7 +284,8 @@ export function Segmented({ options, value, onChange, size = 'md', ariaLabel, fu
       <span aria-hidden style={{
         position: 'absolute', top: 2, bottom: 2, left: 2, width: `calc((100% - 4px) / ${n})`,
         transform: `translateX(${idx * 100}%)`, transition: 'transform .25s cubic-bezier(.3,.7,.3,1)',
-        background: '#636366', borderRadius: 7, boxShadow: '0 3px 8px rgba(0,0,0,0.25), 0 0 0 0.5px rgba(0,0,0,0.1)',
+        background: A.thumb, borderRadius: 7, boxShadow: 'inset 0 1px 0 var(--glass-rim), 0 3px 8px rgba(0,0,0,0.18), 0 0 0 0.5px rgba(0,0,0,0.08)',
+        backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)',
       }} />
       {options.map(o => {
         const on = o.id === value;
@@ -216,7 +315,7 @@ export function ChipBar({ options, value, onChange, ariaLabel }) {
         return (
           <button key={o.id} role="tab" aria-selected={on} onClick={() => onChange(o.id)} className="ap-btn ap-press" style={{
             flexShrink: 0, height: 32, padding: '0 14px', borderRadius: 999, border: 'none', cursor: 'pointer',
-            background: on ? A.label : A.fill3, color: on ? '#000' : A.label, fontSize: 14, fontWeight: on ? 600 : 500,
+            background: on ? 'var(--ap-selected)' : A.fill3, color: on ? 'var(--ap-on-selected)' : A.label, fontSize: 14, fontWeight: on ? 600 : 500,
           }}>{o.label}</button>
         );
       })}
@@ -243,7 +342,7 @@ export function TintedButton({ children, onClick, color = A.tint, style, title, 
 }
 export function CircleButton({ icon, onClick, ariaLabel, title, disabled, size = 32 }) {
   return (
-    <button type="button" onClick={onClick} disabled={disabled} aria-label={ariaLabel} title={title || ariaLabel} className="ap-btn ap-press" style={{
+    <button type="button" onClick={onClick} disabled={disabled} aria-label={ariaLabel} title={title || ariaLabel} className="ap-btn ap-press glass-pill" style={{
       width: size, height: size, borderRadius: '50%', border: 'none', background: A.fill3, color: disabled ? A.label3 : A.label,
       cursor: disabled ? 'default' : 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
     }}><Icon name={icon} size={size * 0.52} weight={2.3} /></button>
@@ -284,7 +383,7 @@ export function Avatar({ name, color, size = 36, text }) {
 
 // ── Inset grouped list pieces ────────────────────────────────
 export function Group({ children, style }) {
-  return <div style={{ background: A.cell, borderRadius: 12, overflow: 'hidden', ...style }}>{children}</div>;
+  return <div className="glass" style={{ overflow: 'hidden', ...style }}>{children}</div>;
 }
 export function SectionHeader({ children, right, style, id }) {
   return (
@@ -415,14 +514,14 @@ export function Sheet({ open, onClose, title, subtitle, children, isMobile, acce
   }, [open, onClose]);
   if (!open) return null;
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 900, background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)',
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 900, background: 'var(--ap-scrim)', backdropFilter: 'blur(8px) saturate(120%)', WebkitBackdropFilter: 'blur(8px) saturate(120%)',
       display: 'flex', alignItems: isMobile ? 'flex-end' : 'center', justifyContent: 'center', padding: isMobile ? 0 : 24 }}>
-      <div ref={ref} tabIndex={-1} role="dialog" aria-modal="true" aria-label={typeof title === 'string' ? title : undefined} onClick={e => e.stopPropagation()} className="ap-fade"
+      <div ref={ref} tabIndex={-1} role="dialog" aria-modal="true" aria-label={typeof title === 'string' ? title : undefined} onClick={e => e.stopPropagation()} className="ap-fade glass-strong"
         style={{ outline: 'none', width: '100%', maxWidth: isMobile ? 'none' : width, maxHeight: isMobile ? '88vh' : '84vh', overflow: 'auto',
-          background: A.cell, borderRadius: isMobile ? '14px 14px 0 0' : 14, boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+          borderRadius: isMobile ? '22px 22px 0 0' : 22,
           paddingBottom: isMobile ? 'calc(16px + env(safe-area-inset-bottom))' : 16 }}>
         {isMobile && <div style={{ width: 36, height: 5, borderRadius: 3, background: A.fill, margin: '7px auto 0' }} />}
-        <div style={{ position: 'sticky', top: 0, zIndex: 1, background: A.cell, display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px 12px', borderBottom: `0.5px solid ${A.sep}` }}>
+        <div className="glass-bar" style={{ position: 'sticky', top: 0, zIndex: 1, display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px 12px', borderBottom: `0.5px solid ${A.sep}` }}>
           {accessory}
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 17, fontWeight: 600 }}>{title}</div>

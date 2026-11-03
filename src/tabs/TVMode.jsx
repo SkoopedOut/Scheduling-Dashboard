@@ -65,7 +65,7 @@ export default function TVMode({ data, onExit, fileMeta, error, isRefreshing }) 
   const th = { padding: '1vh 0.8vw', textAlign: 'left', fontSize: '1.7vh', fontWeight: 600, color: A.label2, borderBottom: `1px solid ${A.sep}` };
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: A.bg, color: A.label, fontFamily: A.font, display: 'flex', flexDirection: 'column', zIndex: 1000, overflow: 'hidden' }}>
+    <div className="ap-ambient" style={{ position: 'fixed', inset: 0, color: A.label, fontFamily: A.font, display: 'flex', flexDirection: 'column', zIndex: 1000, overflow: 'hidden' }}>
       <style>{APPLE_CSS + ' .tv-scroll{scrollbar-width:none} .tv-scroll::-webkit-scrollbar{display:none}'}</style>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '2.4vh 3vw 2vh' }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: '1.4vw', marginRight: '2vw', flexShrink: 0 }}>
@@ -90,7 +90,7 @@ export default function TVMode({ data, onExit, fileMeta, error, isRefreshing }) 
         {view === 0 ? (
           jobs.length === 0
             ? <div style={{ textAlign: 'center', paddingTop: '22vh', fontSize: '4vh', color: A.label2 }}>No jobs scheduled today</div>
-            : <div style={{ background: A.cell, borderRadius: '1.6vh', overflow: 'hidden' }}>
+            : <div className="glass" style={{ borderRadius: '1.6vh', overflow: 'hidden' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead><tr>
                     <th style={{ ...th, paddingLeft: '1.4vw' }}>Time</th><th style={th}>Customer</th><th style={th}>Trucks</th><th style={th}>Location</th><th style={th}>Crew</th><th style={{ ...th, textAlign: 'center' }}>PM</th>
@@ -105,7 +105,7 @@ export default function TVMode({ data, onExit, fileMeta, error, isRefreshing }) 
                       const td = { padding: cellPad, borderTop: `1px solid ${A.sep}`, verticalAlign: 'top' };
                       return (
                         <Fragment key={i}>
-                          {(firstOT || firstC) && <tr><td colSpan={6} style={{ padding: '2vh 1.4vw 0.8vh', fontSize: '2vh', fontWeight: 700, color: firstOT ? SYS.yellow : SYS.red, borderTop: `1px solid ${A.sep}`, background: A.bg }}>{firstOT ? 'Overtime' : 'Cancelled'}</td></tr>}
+                          {(firstOT || firstC) && <tr><td colSpan={6} style={{ padding: '2vh 1.4vw 0.8vh', fontSize: '2vh', fontWeight: 700, color: firstOT ? SYS.yellow : SYS.red, borderTop: `1px solid ${A.sep}`, background: A.fill4 }}>{firstOT ? 'Overtime' : 'Cancelled'}</td></tr>}
                           <tr style={{ opacity: isC ? 0.55 : 1 }}>
                             <td style={{ ...td, paddingLeft: '1.4vw', whiteSpace: 'nowrap' }}>
                               <span style={{ display: 'inline-block', width: '0.45vw', minWidth: 4, height: '3.4vh', borderRadius: 3, background: accent, verticalAlign: 'middle', marginRight: '0.8vw' }} />
@@ -140,7 +140,7 @@ export default function TVMode({ data, onExit, fileMeta, error, isRefreshing }) 
               const cc = (dd?.jobs || []).length - act.length;
               const isToday = dn === today;
               return (
-                <div key={dn} style={{ borderRadius: '1.6vh', padding: '2.6vh 1vw', background: A.cell, boxShadow: isToday ? `inset 0 0 0 0.35vh ${SYS.red}` : 'none' }}>
+                <div key={dn} className="glass" style={{ borderRadius: '1.6vh', padding: '2.6vh 1vw', boxShadow: isToday ? `inset 0 0 0 0.35vh ${SYS.red}, var(--glass-shadow)` : undefined }}>
                   <div style={{ fontSize: '2.2vh', fontWeight: 600, color: isToday ? SYS.red : A.label2 }}>{dn.slice(0, 3)}</div>
                   <div className="tnum" style={{ fontSize: '3vh', fontWeight: 600, marginTop: '0.3vh' }}>{dd?.date ? Number(dd.date.slice(8)) : '–'}</div>
                   <div className="tnum" style={{ fontSize: '8vh', fontWeight: 600, lineHeight: 1.05, letterSpacing: '-0.03em', marginTop: '2vh' }}>{act.length}</div>

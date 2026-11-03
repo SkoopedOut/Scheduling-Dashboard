@@ -4,7 +4,6 @@
 // within one time slot, NEW / moved flags vs the comparison day); only the
 // presentation changed, plus the search query now comes from the page.
 import { useState, useEffect, Fragment } from 'react';
-import { FOREMAN_ORDER } from './sampleData.js';
 import {
   PM_COLORS, SYS, foremanColor, isOvertimeStart, isNonPerson, isStopLabel, isDriverTag, hasDriverTag,
   canonicalName, getNewJobIds, isNewJob, getMovedCrew, getConflictsForDay, hasTruck, jobMatchesQuery,
@@ -124,8 +123,8 @@ export default function DayJobs({ dayData, flashedJobs, weeksCache, curSatKey, q
   // Foremen come from today's parsed roster (bold names in the sheet), so renames just work
   const foremanKeys = Object.keys(dayData.crews || {});
   const foremanIdx = new Map(foremanKeys.map((f, i) => [f, i]));
-  const isForeman = n => foremanIdx.has(n) || FOREMAN_ORDER.includes(n);
-  const colorOf = n => foremanColor(n, foremanIdx.has(n) ? foremanIdx.get(n) : FOREMAN_ORDER.indexOf(n));
+  const isForeman = n => foremanIdx.has(n);
+  const colorOf = n => foremanColor(n, foremanIdx.has(n) ? foremanIdx.get(n) : -1);
   const togglePerson = n => setHlPerson(p => (p === n ? null : n));
   const multiJobs = getConflictsForDay(dayData);
   const multiCounts = new Map(multiJobs.map(c => [c.name, c.count]));

@@ -39,7 +39,7 @@ function Editor({ profile, rosterInfo, onSave, onCancel, onDelete }) {
   const set = (k, v) => { setDraft(d => ({ ...d, [k]: v })); setTouched(true); };
 
   return (
-    <div className="ap-fade" style={{ background: A.cell2, borderRadius: 12, padding: 16, margin: '0 0 14px' }}>
+    <div className="ap-fade glass" style={{ padding: 16, margin: '0 0 14px' }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 14 }}>
         <Field label="Name on the log book" hint="How the schedule spells it. Can’t be changed here."><TextInput value={draft.rosterName} readOnly /></Field>
         <Field label="Real name" hint="Fill in when the log book uses a nickname."><TextInput value={draft.displayName} placeholder={draft.rosterName} onChange={v => set('displayName', v)} /></Field>
@@ -49,10 +49,10 @@ function Editor({ profile, rosterInfo, onSave, onCancel, onDelete }) {
             {ROLES.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
           </SelectField>
         </Field>
-        <Field label="Phone" error={errors.phone}><TextInput type="tel" value={draft.phone} placeholder="(978) 555-0134" invalid={!!errors.phone} onChange={v => set('phone', v)} onBlur={e => set('phone', formatPhone(e.target.value))} /></Field>
+        <Field label="Phone" error={errors.phone}><TextInput type="tel" value={draft.phone} placeholder="Mobile number" invalid={!!errors.phone} onChange={v => set('phone', v)} onBlur={e => set('phone', formatPhone(e.target.value))} /></Field>
         <Field label="Teams email" error={errors.teamsEmail}><TextInput type="email" value={draft.teamsEmail} placeholder="name@hubofficeinc.com" invalid={!!errors.teamsEmail} onChange={v => set('teamsEmail', v)} /></Field>
         <Field label="Other spellings" hint="Separate with commas — for job-row spellings that don’t match.">
-          <TextInput value={(draft.aliases || []).join(', ')} placeholder="Mike, Mikey" onChange={v => set('aliases', v.split(',').map(x => x.trim()).filter(Boolean))} />
+          <TextInput value={(draft.aliases || []).join(', ')} placeholder="Nicknames or other spellings" onChange={v => set('aliases', v.split(',').map(x => x.trim()).filter(Boolean))} />
         </Field>
         <Field label="Notes" wide><TextInput value={draft.notes} onChange={v => set('notes', v)} /></Field>
       </div>

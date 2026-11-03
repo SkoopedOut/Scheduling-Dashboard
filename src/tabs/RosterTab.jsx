@@ -3,13 +3,11 @@
 // person, PMs, the unassigned pools, and a sheet with anyone's week that
 // links through to their whole month.
 import { useState, Fragment } from 'react';
-import { FOREMAN_ORDER } from '../sampleData.js';
 import { DAY_ORDER, SYS, PM_COLORS, foremanColor, canonicalName, isNonPerson, isOvertimeStart, todayIso, hasDriverTag } from '../scheduleUtils.js';
 import { A, tint, Icon, Capsule, QualBadge, PMBadge, Avatar, Group, SectionHeader, SectionFooter, Sheet, Ring, FilledButton, EmptyState } from '../ui/apple.jsx';
 
 export function getForemanList(crews) {
-  if (!crews || Object.keys(crews).length === 0) return FOREMAN_ORDER;
-  return Object.keys(crews); // sheet order
+  return Object.keys(crews || {}); // sheet order — only foremen actually on the roster
 }
 const same = (a, b) => canonicalName(a).toLowerCase() === String(b).toLowerCase();
 function jobsFor(name, dayData) { return (dayData?.jobs || []).filter(j => !j.cancelled && (j.crew || []).some(c => !isNonPerson(c) && same(c, name))); }
@@ -25,7 +23,7 @@ function WeekDots({ name, allData, color, pm }) {
         const isToday = allData?.[d]?.date === today;
         return <span key={d} title={`${d}${on ? ' — scheduled' : ''}`} style={{
           width: 9, height: 9, borderRadius: '50%', background: on ? color : A.fill3,
-          boxShadow: isToday ? `0 0 0 1.5px ${A.cell}, 0 0 0 3px ${SYS.red}` : 'none' }} />;
+          boxShadow: isToday ? `0 0 0 1.5px ${A.cellSolid}, 0 0 0 3px ${SYS.red}` : 'none' }} />;
       })}
     </span>
   );
@@ -132,8 +130,8 @@ export default function RosterTab({ crews, pools, unavailable, unassigned, jobs,
           const color = PM_COLORS[pm] || SYS.gray;
           const count = DAY_ORDER.reduce((n, d) => n + pmJobs(pm, allData?.[d]).length, 0);
           return (
-            <button key={pm} type="button" onClick={() => setSel({ kind: 'pm', name: `PM ${pm}`, code: pm, color })} className="ap-btn ap-press" style={{
-              display: 'flex', alignItems: 'center', gap: 12, padding: 12, borderRadius: 12, border: 'none', background: A.cell, color: 'inherit', cursor: 'pointer', textAlign: 'left' }}>
+            <button key={pm} type="button" onClick={() => setSel({ kind: 'pm', name: `PM ${pm}`, code: pm, color })} className="ap-btn ap-press glass" style={{
+              display: 'flex', alignItems: 'center', gap: 12, padding: 12, border: 'none', color: 'inherit', cursor: 'pointer', textAlign: 'left' }}>
               <Avatar text={pm} color={color} size={38} />
               <span style={{ minWidth: 0, flex: 1 }}>
                 <span style={{ display: 'block', fontSize: 15, fontWeight: 600 }}>PM {pm}</span>

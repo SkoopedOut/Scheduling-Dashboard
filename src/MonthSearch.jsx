@@ -5,7 +5,7 @@
 //
 // Data comes from the same weeksCache the rest of the app uses; this view
 // asks the app to load every week that overlaps the month.
-import { useEffect, useMemo, useState, Fragment } from 'react';
+import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import {
   DAY_ORDER, SYS, PM_COLORS, foremanColor, isOvertimeStart, isNonPerson, canonicalName, hasDriverTag,
   getSaturdayKey, isoDate, todayIso, jobMatchesQuery, satKeyToLabel,
@@ -15,6 +15,7 @@ import {
   A, tint, Icon, Capsule, PMBadge, Avatar, Group, SectionHeader, SectionFooter, Segmented, ChipBar,
   Highlight, PlainButton, CircleButton, Spinner, useWidth,
 } from './ui/apple.jsx';
+import { DateJumpButton, SelectedDayCard, dayNameOf } from './ui/DateJump.jsx';
 
 export const ROLE_VIEWS = [
   { id: 'jobs', label: 'Jobs' },
@@ -145,7 +146,7 @@ function matchesPerson(p, q) {
 }
 
 // ── Mini month (Calendar sidebar style) ──────────────────────
-function MiniMonth({ y, m, marks, onPick, loadedDates, compact }) {
+function MiniMonth({ y, m, marks, onPick, loadedDates, compact, selected }) {
   const dim = new Date(y, m + 1, 0).getDate();
   const start = new Date(y, m, 1).getDay();
   const today = todayIso();
@@ -163,18 +164,19 @@ function MiniMonth({ y, m, marks, onPick, loadedDates, compact }) {
           const ds = isoDate(new Date(y, m, d));
           const mk = marks.get(ds);
           const isToday = ds === today;
+          const isSel = ds === selected;
           const loaded = loadedDates.has(ds);
           const size = compact ? 30 : 34;
           return (
-            <button key={ds} type="button" disabled={!mk} onClick={() => mk && onPick(ds)} className="ap-btn ap-press"
-              aria-label={`${LONG_DAY(ds)}${mk ? `, ${mk.label}` : ''}`}
-              style={{ background: 'none', border: 'none', padding: 0, cursor: mk ? 'pointer' : 'default', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
+            <button key={ds} type="button" onClick={() => onPick(ds)} className="ap-btn ap-press" aria-pressed={isSel}
+              aria-label={`${LONG_DAY(ds)}${mk ? `, ${mk.label}` : loaded ? ', no jobs' : ''}${isToday ? ', today' : ''}`}
+              style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
               <span className="tnum" style={{
                 width: size, height: size, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 15, fontWeight: mk?.strong || isToday ? 600 : 400,
-                background: mk?.fill ? mk.fill : 'transparent',
-                color: mk?.fill ? '#fff' : isToday ? SYS.red : !loaded ? A.label4 : mk ? A.label : A.label3,
-                boxShadow: isToday && mk?.fill ? `0 0 0 2px ${A.cell}, 0 0 0 3.5px ${SYS.red}` : 'none',
+                fontSize: 15, fontWeight: mk?.strong || isToday || isSel ? 600 : 400,
+                background: mk?.fill ? mk.fill : isSel ? tint(SYS.blue, 0.16) : 'transparent',
+                color: mk?.fill ? '#fff' : isToday ? SYS.red : !loaded ? A.label3 : mk ? A.label : A.label2,
+                boxShadow: isSel ? `0 0 0 2px ${A.cellSolid}, 0 0 0 3.5px ${SYS.blue}` : isToday && mk?.fill ? `0 0 0 2px ${A.cellSolid}, 0 0 0 3.5px ${SYS.red}` : 'none',
               }}>{d}</span>
               {!compact && <span className="tnum" style={{ fontSize: 10, height: 12, color: mk?.dotColor || A.label3 }}>{mk?.caption ?? ''}</span>}
             </button>
@@ -188,7 +190,7 @@ function MiniMonth({ y, m, marks, onPick, loadedDates, compact }) {
 // ── Main component ───────────────────────────────────────────
 export default function MonthSearch({
   weeksCache, weekStatus, requestWeek, mode, profiles, monthCursor, setMonthCursor,
-  query, view, setView, personKey, setPersonKey, onOpenDay, isMobile,
+  query, view, setView, personKey, setPersonKey, onOpenDay, isMobile, focus, onJumpDate, onToday,
 }) {
   const y = monthCursor.getFullYear(), m = monthCursor.getMonth();
   const dim = new Date(y, m + 1, 0).getDate();
@@ -213,8 +215,17 @@ export default function MonthSearch({
   const loadedDates = useMemo(() => new Set(model.days.map(d => d.date)), [model]);
   const monthName = monthCursor.toLocaleDateString('en-US', { month: 'long' });
   const monthTitle = monthCursor.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-  const now = new Date();
-  const isThisMonth = now.getFullYear() === y && now.getMonth() === m;
+  const [dismissedSeq, setDismissedSeq] = useState(null);
+  const monthPrefix = `${y}-${String(m + 1).padStart(2, '0')}-`;
+  // The picked date, if it falls in the month on screen
+  const focusDate = focus?.date && focus.date.startsWith(monthPrefix) && dismissedSeq !== focus.seq ? focus.date : null;
+  const focusInfo = useMemo(() => {
+    if (!focusDate) return null;
+    const day = model.days.find(d => d.date === focusDate);
+    const act = (day?.data.jobs || []).filter(j => !j.cancelled);
+    return { loaded: !!day, loading: !day && weekStatus?.[getSaturdayKey(new Date(focusDate + 'T12:00:00'))] === 'loading',
+      jobs: act.length, men: act.reduce((t, j) => t + (j.numMen || 0), 0) };
+  }, [focusDate, model, weekStatus]);
 
   const person = personKey
     ? (personKey.startsWith('pm:') ? model.pms.find(p => p.key === personKey) : model.people.find(p => p.key === personKey))
@@ -228,7 +239,8 @@ export default function MonthSearch({
       <CircleButton icon="chevronLeft" onClick={() => shiftMonth(-1)} ariaLabel="Previous month" size={30} />
       <div style={{ fontSize: 20, fontWeight: 700, minWidth: isMobile ? 0 : 190, textAlign: 'center', letterSpacing: '-0.01em' }}>{monthTitle}</div>
       <CircleButton icon="chevronRight" onClick={() => shiftMonth(1)} ariaLabel="Next month" size={30} />
-      {!isThisMonth && <PlainButton onClick={() => setMonthCursor(new Date(now.getFullYear(), now.getMonth(), 1))}>This month</PlainButton>}
+      <PlainButton onClick={onToday} title="Jump to today’s date">Today</PlainButton>
+      <DateJumpButton onJump={onJumpDate} value={focus?.date} />
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: A.label2 }}>
         {loadingCount > 0
           ? <><Spinner size={15} /><span>Loading {loadingCount} {loadingCount === 1 ? 'week' : 'weeks'}…</span></>
@@ -253,18 +265,19 @@ export default function MonthSearch({
         <div style={{ color: A.label3, display: 'flex', justifyContent: 'center', marginBottom: 10 }}><Icon name="calendar" size={34} weight={1.5} /></div>
         <div style={{ fontSize: 17, fontWeight: 600 }}>No log books for {monthTitle}</div>
         <div style={{ fontSize: 14, color: A.label2, marginTop: 4, maxWidth: 420, marginInline: 'auto' }}>
-          {mode === 'live' ? 'None of this month’s weekly log books were found in SharePoint.' : 'Demo mode only has the sample week (March 22–28, 2026). Sign in to search every week in a month.'}
+          None of this month’s weekly log books were found in SharePoint.
         </div>
-        {mode !== 'live' && <div style={{ marginTop: 14 }}><PlainButton onClick={() => setMonthCursor(new Date(2026, 2, 1))}>Go to March 2026</PlainButton></div>}
       </Group>
     );
   } else if (person) {
     body = <PersonAgenda person={person} model={model} y={y} m={m} q={q} wide={wide} loadedDates={loadedDates}
       onBack={() => { setView(person.isPM ? 'pm' : person.role); setPersonKey(null); }}
-      backLabel={ROLE_VIEWS.find(v => v.id === (person.isPM ? 'pm' : person.role))?.label || 'Back'} onOpenDay={onOpenDay} isMobile={isMobile} />;
+      backLabel={ROLE_VIEWS.find(v => v.id === (person.isPM ? 'pm' : person.role))?.label || 'Back'} onOpenDay={onOpenDay} isMobile={isMobile}
+      focus={focus} onSelectDate={onJumpDate} />;
   } else if (view === 'jobs') {
     body = <JobsResults model={model} y={y} m={m} q={q} wide={wide} loadedDates={loadedDates} onOpenDay={onOpenDay}
-      onPickPerson={(p) => { setView(p.isPM ? 'pm' : p.role); setPersonKey(p.key); }} isMobile={isMobile} monthName={monthName} />;
+      onPickPerson={(p) => { setView(p.isPM ? 'pm' : p.role); setPersonKey(p.key); }} isMobile={isMobile} monthName={monthName}
+      focus={focus} onSelectDate={onJumpDate} />;
   } else {
     body = <RoleBoard model={model} role={view} y={y} m={m} dim={dim} q={q} wide={wide} loadedDates={loadedDates}
       onPickPerson={p => setPersonKey(p.key)} onOpenDay={onOpenDay} isMobile={isMobile} />;
@@ -273,6 +286,8 @@ export default function MonthSearch({
   return (
     <div ref={boxRef}>
       {header}
+      {focusDate && <SelectedDayCard date={focusDate} info={focusInfo} isToday={focusDate === todayIso()} compact={isMobile}
+        onOpen={() => onOpenDay({ date: focusDate, day: dayNameOf(focusDate) })} onDismiss={() => setDismissedSeq(focus.seq)} />}
       {!person && roleSwitch}
       {body}
       {missing.length > 0 && (
@@ -346,10 +361,21 @@ function MonthJobRow({ entry, first, q, onOpenDay, showDate, leads }) {
 
 function scrollToDate(prefix, ds) {
   const el = document.getElementById(`${prefix}-${ds}`);
-  if (el) el.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+  if (!el) return false;
+  el.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+  return true;
+}
+// After a jump (Go to date / Today / a tap on the calendar), bring that day's section into view.
+// The week may still be loading, so it keeps trying — once per jump — until the section exists.
+function useScrollToFocus(prefix, focus, ready) {
+  const done = useRef(null);
+  useEffect(() => {
+    if (!focus?.date || done.current === focus.seq) return;
+    if (scrollToDate(prefix, focus.date)) done.current = focus.seq;
+  }, [prefix, focus?.seq, focus?.date, ready]);
 }
 
-function JobsResults({ model, y, m, q, wide, loadedDates, onOpenDay, onPickPerson, isMobile, monthName }) {
+function JobsResults({ model, y, m, q, wide, loadedDates, onOpenDay, onPickPerson, isMobile, monthName, focus, onSelectDate }) {
   const groups = useMemo(() => {
     const out = [];
     for (const d of model.days) {
@@ -360,6 +386,7 @@ function JobsResults({ model, y, m, q, wide, loadedDates, onOpenDay, onPickPerso
     return out;
   }, [model, q]);
   const hitCount = groups.reduce((s, g) => s + g.entries.filter(e => !e.job.cancelled).length, 0);
+  useScrollToFocus('mj', focus, groups.length);
   const topPeople = useMemo(() => {
     if (!q) return [];
     const ppl = model.people.filter(p => p.jobCount > 0 && matchesPerson(p, q));
@@ -383,9 +410,9 @@ function JobsResults({ model, y, m, q, wide, loadedDates, onOpenDay, onPickPerso
           <SectionHeader>People</SectionHeader>
           <div className="ap-hscroll" style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 2 }}>
             {topPeople.map(p => (
-              <button key={p.key} type="button" onClick={() => onPickPerson(p)} className="ap-btn ap-press" style={{
-                display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px 8px 8px', borderRadius: 14, border: 'none',
-                background: A.cell, color: A.label, cursor: 'pointer', flexShrink: 0, textAlign: 'left' }}>
+              <button key={p.key} type="button" onClick={() => onPickPerson(p)} className="ap-btn ap-press glass" style={{
+                display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px 8px 8px', borderRadius: 16, border: 'none',
+                color: A.label, cursor: 'pointer', flexShrink: 0, textAlign: 'left' }}>
                 <Avatar name={p.isPM ? p.code : p.name} text={p.isPM ? p.code : undefined} color={p.color || (p.isPM ? null : undefined)} size={34} />
                 <span>
                   <span style={{ display: 'block', fontSize: 15, fontWeight: 600 }}><Highlight text={p.name} q={q} /></span>
@@ -437,9 +464,9 @@ function JobsResults({ model, y, m, q, wide, loadedDates, onOpenDay, onPickPerso
     <div style={{ display: 'grid', gridTemplateColumns: '300px minmax(0,1fr)', gap: 28, alignItems: 'start' }}>
       <aside style={{ position: 'sticky', top: 16 }}>
         <Group style={{ padding: 14 }}>
-          <MiniMonth y={y} m={m} marks={marks} loadedDates={loadedDates} onPick={ds => scrollToDate('mj', ds)} />
+          <MiniMonth y={y} m={m} marks={marks} loadedDates={loadedDates} onPick={onSelectDate} selected={focus?.date} />
         </Group>
-        <SectionFooter>{summary}<div style={{ marginTop: 6 }}>Tap a date to jump to it.</div></SectionFooter>
+        <SectionFooter>{summary}<div style={{ marginTop: 6 }}>Tap any date to jump to it — even one with no jobs.</div></SectionFooter>
       </aside>
       {list}
     </div>
@@ -547,7 +574,7 @@ function RoleBoard({ model, role, y, m, dim, q, wide, loadedDates, onPickPerson,
 }
 
 // ── Person agenda ────────────────────────────────────────────
-function PersonAgenda({ person: p, model, y, m, q, wide, loadedDates, onBack, backLabel, onOpenDay, isMobile }) {
+function PersonAgenda({ person: p, model, y, m, q, wide, loadedDates, onBack, backLabel, onOpenDay, isMobile, focus, onSelectDate }) {
   const color = p.color || (p.isPM ? PM_COLORS[p.code] : SYS.blue);
   const todayStr = todayIso();
   const monthHasToday = todayStr.startsWith(`${y}-${String(m + 1).padStart(2, '0')}-`);
@@ -582,6 +609,7 @@ function PersonAgenda({ person: p, model, y, m, q, wide, loadedDates, onBack, ba
   const subtitle = p.isPM ? 'Project manager'
     : [p.roleLabel, p.realName && p.realName !== p.name ? p.realName : null, p.crewOf && p.role !== 'foreman' ? `${p.crewOf}’s crew` : null, !p.onRoster ? 'Not on roster' : null].filter(Boolean).join(' · ');
   const today = todayIso();
+  useScrollToFocus('pa', focus, groups.length);
 
   const card = (
     <div>
@@ -603,9 +631,9 @@ function PersonAgenda({ person: p, model, y, m, q, wide, loadedDates, onBack, ba
         </div>
       </Group>
       <Group style={{ padding: 14, marginTop: 14 }}>
-        <MiniMonth y={y} m={m} marks={marks} loadedDates={loadedDates} onPick={ds => scrollToDate('pa', ds)} compact={isMobile} />
+        <MiniMonth y={y} m={m} marks={marks} loadedDates={loadedDates} onPick={onSelectDate} compact={isMobile} selected={focus?.date} />
       </Group>
-      <SectionFooter>Filled dates are days {p.isPM ? 'with jobs called in' : 'scheduled'}. Tap one to jump to it.</SectionFooter>
+      <SectionFooter>Filled dates are days {p.isPM ? 'with jobs called in' : 'scheduled'}. Tap any date to jump to it.</SectionFooter>
     </div>
   );
 

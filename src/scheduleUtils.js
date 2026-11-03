@@ -4,12 +4,14 @@
 import { getWeekFileInfo } from './sharepoint.js';
 
 export const DAY_ORDER = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-// Apple system colors (dark appearance) so crews read the same way on
-// every screen: the TV, the roster and the Schedule page.
+// Apple system colors. Each value is a CSS variable defined in ui/apple.jsx
+// (THEME_VARS) with a dark and a light variant, so every screen — the TV,
+// the roster and the Schedule page — follows the active appearance. Never
+// parse these as hex: use tint() from ui/apple.jsx for translucent versions.
 export const SYS = {
-  blue:"#0A84FF", green:"#30D158", indigo:"#5E5CE6", orange:"#FF9F0A", pink:"#FF375F",
-  purple:"#BF5AF2", red:"#FF453A", teal:"#40C8E0", cyan:"#64D2FF", yellow:"#FFD60A",
-  mint:"#66D4CF", brown:"#AC8E68", gray:"#8E8E93",
+  blue:"var(--sys-blue)", green:"var(--sys-green)", indigo:"var(--sys-indigo)", orange:"var(--sys-orange)", pink:"var(--sys-pink)",
+  purple:"var(--sys-purple)", red:"var(--sys-red)", teal:"var(--sys-teal)", cyan:"var(--sys-cyan)", yellow:"var(--sys-yellow)",
+  mint:"var(--sys-mint)", brown:"var(--sys-brown)", gray:"var(--sys-gray)",
 };
 export const FOREMAN_COLORS = {
   Jeremy:SYS.blue, Phil:SYS.orange, Matt:SYS.green, Kritter:SYS.pink,

@@ -1,11 +1,12 @@
 // ── Month calendar ───────────────────────────────────────────
 // Apple Calendar month grid: hairline cells, today in a red circle, and a
 // compact summary of jobs / men / overtime in each day.
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { DAY_ORDER, SYS, isOvertimeStart, getSaturdayKey, isoDate, todayIso } from '../scheduleUtils.js';
+import { DateJumpButton, SelectedDayCard } from '../ui/DateJump.jsx';
 import { A, tint, Icon, CircleButton, PlainButton, TintedButton, Spinner, SectionFooter } from '../ui/apple.jsx';
 
-export default function MonthTab({ weeksCache, weekStatus, monthCursor, setMonthCursor, onPickDay, mode, requestWeek, isMobile, onSearchMonth, seasonPanel }) {
+export default function MonthTab({ weeksCache, weekStatus, monthCursor, setMonthCursor, onPickDay, mode, requestWeek, isMobile, onSearchMonth, seasonPanel, focus, onJumpDate, onToday }) {
   const y = monthCursor.getFullYear(), m = monthCursor.getMonth();
   const dim = new Date(y, m + 1, 0).getDate();
   const start = new Date(y, m, 1).getDay();
@@ -30,8 +31,15 @@ export default function MonthTab({ weeksCache, weekStatus, monthCursor, setMonth
   for (let i = 0; i < start; i++) cells.push(null);
   for (let d = 1; d <= dim; d++) cells.push(d);
   while (cells.length % 7) cells.push(null);
-  const now = new Date();
-  const isThis = now.getFullYear() === y && now.getMonth() === m;
+  // The picked date (Go to date / Today): ring it and scroll it into view
+  const [dismissedSeq, setDismissedSeq] = useState(null);
+  const focusDate = focus?.date && focus.date.startsWith(prefix) ? focus.date : null;
+  useEffect(() => {
+    if (!focusDate) return;
+    document.getElementById(`mc-${focusDate}`)?.scrollIntoView({ block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  }, [focus?.seq, focusDate]);
+  const focusInfo = focusDate ? { loaded: !!idx[focusDate], loading: !idx[focusDate] && weekStatus?.[getSaturdayKey(new Date(focusDate + 'T12:00:00'))] === 'loading',
+    jobs: idx[focusDate]?.jobs || 0, men: idx[focusDate]?.men || 0 } : null;
 
   return (
     <div>
@@ -41,7 +49,8 @@ export default function MonthTab({ weeksCache, weekStatus, monthCursor, setMonth
         </div>
         <CircleButton icon="chevronLeft" onClick={() => setMonthCursor(new Date(y, m - 1, 1))} ariaLabel="Previous month" size={30} />
         <CircleButton icon="chevronRight" onClick={() => setMonthCursor(new Date(y, m + 1, 1))} ariaLabel="Next month" size={30} />
-        {!isThis && <PlainButton onClick={() => setMonthCursor(new Date(now.getFullYear(), now.getMonth(), 1))}>Today</PlainButton>}
+        <PlainButton onClick={onToday} title="Jump to today’s date">Today</PlainButton>
+        <DateJumpButton onJump={onJumpDate} value={focus?.date} />
         {loading > 0 && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: A.label2 }}><Spinner size={14} />Loading {loading} {loading === 1 ? 'week' : 'weeks'}…</span>}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
           <span className="tnum" style={{ fontSize: 13, color: A.label2 }}>
@@ -52,7 +61,9 @@ export default function MonthTab({ weeksCache, weekStatus, monthCursor, setMonth
       </div>
 
       {seasonPanel}
-      <div style={{ background: A.cell, borderRadius: 12, overflow: 'hidden' }}>
+      {focusDate && dismissedSeq !== focus.seq && <SelectedDayCard date={focusDate} info={focusInfo} isToday={focusDate === today} compact={isMobile}
+        onOpen={() => onPickDay({ date: focusDate, day: DAY_ORDER[new Date(focusDate + 'T12:00:00').getDay()] })} onDismiss={() => setDismissedSeq(focus.seq)} />}
+      <div className="glass" style={{ overflow: 'hidden' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0,1fr))', borderBottom: `0.5px solid ${A.sep}` }}>
           {DAY_ORDER.map((d, i) => <div key={d} style={{ padding: '8px 10px', fontSize: 12, fontWeight: 600, color: i === 0 || i === 6 ? A.label3 : A.label2, textAlign: isMobile ? 'center' : 'right' }}>{isMobile ? d[0] : d.slice(0, 3)}</div>)}
         </div>
@@ -60,20 +71,23 @@ export default function MonthTab({ weeksCache, weekStatus, monthCursor, setMonth
           {cells.map((d, i) => {
             const col = i % 7;
             const border = { borderRight: col < 6 ? `0.5px solid ${A.sep}` : 'none', borderBottom: i < cells.length - 7 ? `0.5px solid ${A.sep}` : 'none' };
-            if (!d) return <div key={`b${i}`} style={{ ...border, background: 'rgba(0,0,0,0.25)', minHeight: isMobile ? 58 : 108 }} />;
+            if (!d) return <div key={`b${i}`} style={{ ...border, background: A.fill4, minHeight: isMobile ? 58 : 108 }} />;
             const ds = isoDate(new Date(y, m, d));
             const info = idx[ds];
             const isToday = ds === today;
             const weekend = col === 0 || col === 6;
+            const isFocus = ds === focusDate;
+            // Every date opens — a day with no job (or no log book yet) simply shows as empty
             return (
-              <button key={ds} type="button" disabled={!info} onClick={() => info && onPickDay(info)} className={`ap-btn${info ? ' ap-row ap-tap' : ''}`}
-                aria-label={`${new Date(ds + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}${info ? `: ${info.jobs} jobs, ${info.men} men` : ''}`}
+              <button key={ds} id={`mc-${ds}`} type="button" onClick={() => onPickDay(info || { date: ds, day: DAY_ORDER[col] })} className="ap-btn ap-row ap-tap" aria-current={isToday ? 'date' : undefined}
+                aria-label={`${new Date(ds + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}${info ? `: ${info.jobs} jobs, ${info.men} men` : ': no jobs'}${isFocus ? ', selected' : ''}`}
                 style={{ ...border, minHeight: isMobile ? 58 : 108, padding: isMobile ? '6px 2px' : '8px 10px', display: 'flex', flexDirection: 'column', alignItems: isMobile ? 'center' : 'stretch',
-                  gap: 3, background: weekend ? 'rgba(255,255,255,0.015)' : 'transparent', borderTop: 'none', borderLeft: 'none', color: 'inherit', textAlign: 'left', cursor: info ? 'pointer' : 'default' }}>
+                  gap: 3, background: isFocus ? tint(SYS.blue, 0.14) : weekend ? tint(A.fill4, 0.5) : 'transparent', borderTop: 'none', borderLeft: 'none', color: 'inherit', textAlign: 'left', cursor: 'pointer',
+                  boxShadow: isFocus ? `inset 0 0 0 2px ${SYS.blue}` : 'none', position: 'relative' }}>
                 <span style={{ alignSelf: isMobile ? 'center' : 'flex-end' }}>
                   <span className="tnum" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, borderRadius: '50%',
                     fontSize: 14, fontWeight: isToday ? 700 : 500, background: isToday ? SYS.red : 'transparent',
-                    color: isToday ? '#fff' : info ? A.label : A.label3 }}>{d}</span>
+                    color: isToday ? '#fff' : info ? A.label : A.label2 }}>{d}</span>
                 </span>
                 {info && info.jobs > 0 && (isMobile ? (
                   <>
@@ -104,7 +118,7 @@ export default function MonthTab({ weeksCache, weekStatus, monthCursor, setMonth
         </div>
       </div>
       <SectionFooter style={{ marginTop: 10 }}>
-        {mode === 'live' ? 'Select a day to open it.' : 'Demo mode only has the sample week (March 22–28, 2026). Sign in to fill in the month.'}
+        Select any day to open it — days with no jobs open too. Use Today or Go to date to move around.
         {isMobile && ' Blue dot: jobs · yellow: overtime · red: cancelled.'}
       </SectionFooter>
     </div>
